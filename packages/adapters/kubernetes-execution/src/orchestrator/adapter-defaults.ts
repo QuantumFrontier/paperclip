@@ -51,6 +51,11 @@ export const ADAPTER_DEFAULTS: Record<string, AdapterDefaults> = {
     envKeys: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
     allowFqdns: ["api.anthropic.com", "api.openai.com"],
   },
+  opencode_local: {
+    runtimeImage: `${REGISTRY_BASE}/agent-runtime-opencode`,
+    envKeys: ["OPENAI_API_KEY"],
+    allowFqdns: ["api.openai.com"],
+  },
 };
 
 export function getAdapterDefaults(adapterType: string): AdapterDefaults {

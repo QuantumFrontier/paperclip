@@ -54,4 +54,11 @@ describe("adapter defaults registry", () => {
     expect(d.envKeys).toEqual(expect.arrayContaining(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]));
     expect(d.allowFqdns).toEqual(expect.arrayContaining(["api.anthropic.com", "api.openai.com"]));
   });
+
+  it("opencode_local has expected env + fqdn defaults", () => {
+    const d = getAdapterDefaults("opencode_local");
+    expect(d.runtimeImage).toMatch(/agent-runtime-opencode/);
+    expect(d.envKeys).toContain("OPENAI_API_KEY");
+    expect(d.allowFqdns).toContain("api.openai.com");
+  });
 });
