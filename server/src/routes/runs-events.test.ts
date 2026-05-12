@@ -6,7 +6,15 @@ function deps(overrides?: Partial<RunsEventsDeps>): RunsEventsDeps {
     runJwt: {
       verify: vi.fn(() => ({
         ok: true as const,
-        claims: { runId: "r-1", agentId: "a-1", companyId: "c-1", jobUid: "j-1", exp: 9_999_999_999 },
+        claims: {
+          runId: "r-1",
+          agentId: "a-1",
+          companyId: "c-1",
+          jobUid: "j-1",
+          iss: "paperclip" as const,
+          aud: "paperclip-run" as const,
+          exp: 9_999_999_999,
+        },
       })),
       mint: vi.fn(),
     },
@@ -28,6 +36,30 @@ describe("POST /api/runs/:runId/events", () => {
     expect(d.appendRunEvent).toHaveBeenCalledWith(expect.objectContaining({
       runId: "r-1",
       type: "assistant",
+    }));
+  });
+
+  it("stores only the declared event payload fields", async () => {
+    const d = deps();
+    const handler = createRunsEventsRoute(d);
+    const res = await handler({
+      params: { runId: "r-1" },
+      headers: { authorization: "Bearer fake.jwt" },
+      body: {
+        type: "assistant",
+        ts: "2026-05-09T00:00:00Z",
+        text: "hello",
+        payload: { message: "nested", data: { ok: true } },
+        unexpected: "drop-me",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(d.appendRunEvent).toHaveBeenCalledWith(expect.objectContaining({
+      payload: {
+        message: "nested",
+        data: { ok: true },
+        text: "hello",
+      },
     }));
   });
 

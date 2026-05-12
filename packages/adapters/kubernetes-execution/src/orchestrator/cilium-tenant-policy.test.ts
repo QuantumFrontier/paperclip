@@ -60,6 +60,7 @@ describe("buildTenantCiliumPolicy", () => {
     expect(result).not.toBeNull();
     const cidrRule = result!.spec.egress.find((r) => r.toCIDR);
     expect(cidrRule?.toCIDR).toEqual(["10.42.0.0/16", "172.20.0.0/12"]);
+    expect(cidrRule?.toPorts).toEqual([{ ports: [{ port: "443", protocol: "TCP" }] }]);
   });
 
   it("emits both DNS and CIDR rules when both are set", () => {

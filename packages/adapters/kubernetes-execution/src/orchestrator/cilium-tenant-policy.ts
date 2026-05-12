@@ -8,13 +8,11 @@ export interface BuildTenantCiliumInput {
 }
 
 /**
- * Build a per-tenant CiliumNetworkPolicy that intersects with M1's baseline.
+ * Build a per-tenant CiliumNetworkPolicy that narrows tenant egress.
  *
- * Cilium evaluates multiple CNPs as an AND: traffic is allowed only when
- * every selecting policy permits it. When this builder returns a CNP, the
- * effective egress for the tenant becomes
- *   M1 baseline ∩ (kube-dns, dnsAllowlist, egressCidrs)
- * — strictly tighter than M1 alone.
+ * Cilium combines multiple allow-only policies selecting the same endpoint as
+ * a union, so every rule emitted here must carry its own safety bounds instead
+ * of relying on the baseline policy to subtract ports later.
  *
  * Returns `null` when both arrays are empty, in which case
  * `ensureTenantNamespace` does not apply a second CNP and the M1 baseline
@@ -59,7 +57,10 @@ export function buildTenantCiliumPolicy(input: BuildTenantCiliumInput): CiliumNe
     });
   }
   if (input.egressCidrs.length > 0) {
-    egress.push({ toCIDR: input.egressCidrs });
+    egress.push({
+      toCIDR: input.egressCidrs,
+      toPorts: [{ ports: [{ port: "443", protocol: "TCP" }] }],
+    });
   }
 
   return {

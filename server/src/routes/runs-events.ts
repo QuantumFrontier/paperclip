@@ -23,6 +23,39 @@ export interface RouteResponse {
   body?: Record<string, unknown>;
 }
 
+const RUN_EVENT_PAYLOAD_KEYS = [
+  "data",
+  "error",
+  "exitCode",
+  "level",
+  "message",
+  "metadata",
+  "session_id",
+  "signal",
+  "stderr",
+  "stdout",
+  "text",
+  "tool",
+  "tool_name",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function buildRunEventPayload(body: RouteRequest["body"]): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (isRecord(body.payload)) {
+    Object.assign(payload, body.payload);
+  }
+  for (const key of RUN_EVENT_PAYLOAD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      payload[key] = body[key];
+    }
+  }
+  return payload;
+}
+
 export function createRunsEventsRoute(deps: RunsEventsDeps) {
   return async (req: RouteRequest): Promise<RouteResponse> => {
     const auth = req.headers.authorization;
@@ -39,7 +72,7 @@ export function createRunsEventsRoute(deps: RunsEventsDeps) {
       runId: v.claims.runId,
       type: req.body.type,
       ts: typeof req.body.ts === "string" ? req.body.ts : new Date().toISOString(),
-      payload: req.body,
+      payload: buildRunEventPayload(req.body),
     });
     return { status: 204 };
   };

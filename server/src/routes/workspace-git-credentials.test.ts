@@ -9,7 +9,15 @@ function deps(overrides?: Partial<WorkspaceGitCredentialsDeps>): WorkspaceGitCre
     runJwt: {
       verify: vi.fn(() => ({
         ok: true as const,
-        claims: { runId: "r-1", agentId: "a-1", companyId: "c-1", jobUid: "j-1", exp: 9_999_999_999 },
+        claims: {
+          runId: "r-1",
+          agentId: "a-1",
+          companyId: "c-1",
+          jobUid: "j-1",
+          iss: "paperclip" as const,
+          aud: "paperclip-run" as const,
+          exp: 9_999_999_999,
+        },
       })),
       mint: vi.fn(),
     },
