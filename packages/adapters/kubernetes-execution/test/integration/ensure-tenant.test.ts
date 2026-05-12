@@ -5,18 +5,18 @@ import { createKubernetesApiClient, ensureTenantNamespace, type ResolvedClusterC
 let cluster: KindCluster;
 let connection: ResolvedClusterConnection;
 
-beforeAll(() => {
-  cluster = spinUpKind();
-  connection = {
-    id: "c-1", label: "kind", kind: "kubeconfig", kubeconfigYaml: cluster.kubeconfigYaml,
-    defaultNamespacePrefix: "paperclip-",
-    allowAgentImageOverride: false,
-    capabilities: { cilium: false, storageClass: "standard", architectures: ["amd64"] },
-  };
-}, 240_000);
-afterAll(() => cluster?.cleanup());
+describe.skipIf(!process.env["K8S_INTEGRATION"])("ensureTenantNamespace against kind", () => {
+  beforeAll(() => {
+    cluster = spinUpKind();
+    connection = {
+      id: "c-1", label: "kind", kind: "kubeconfig", kubeconfigYaml: cluster.kubeconfigYaml,
+      defaultNamespacePrefix: "paperclip-",
+      allowAgentImageOverride: false,
+      capabilities: { cilium: false, storageClass: "standard", architectures: ["amd64"] },
+    };
+  }, 240_000);
+  afterAll(() => cluster?.cleanup());
 
-describe("ensureTenantNamespace against kind", () => {
   it("provisions a fully isolated tenant namespace", async () => {
     const client = createKubernetesApiClient(connection);
     const result = await ensureTenantNamespace(client, {

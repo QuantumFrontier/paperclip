@@ -3,10 +3,11 @@ import { spinUpKind, type KindCluster } from "./_harness.js";
 import { createKubernetesApiClient, ensureTenantNamespace, type ResolvedClusterConnection } from "../../src/index.js";
 
 let cluster: KindCluster;
-beforeAll(() => { cluster = spinUpKind(); }, 240_000);
-afterAll(() => cluster?.cleanup());
 
-describe("ensureTenantNamespace drift correction", () => {
+describe.skipIf(!process.env["K8S_INTEGRATION"])("ensureTenantNamespace drift correction", () => {
+  beforeAll(() => { cluster = spinUpKind(); }, 240_000);
+  afterAll(() => cluster?.cleanup());
+
   it("recreates a NetworkPolicy that was deleted out-of-band", async () => {
     const connection: ResolvedClusterConnection = {
       id: "c-1", label: "kind", kind: "kubeconfig", kubeconfigYaml: cluster.kubeconfigYaml,

@@ -7,10 +7,11 @@ import {
 } from "../../src/index.js";
 
 let cluster: KindCluster;
-beforeAll(() => { cluster = spinUpKind(); }, 240_000);
-afterAll(() => cluster?.cleanup());
 
-describe("PSS Restricted compliance for tenant namespace", () => {
+describe.skipIf(!process.env["K8S_INTEGRATION"])("PSS Restricted compliance for tenant namespace", () => {
+  beforeAll(() => { cluster = spinUpKind(); }, 240_000);
+  afterAll(() => cluster?.cleanup());
+
   it("admission rejects a privileged Pod and accepts a compliant Pod", async () => {
     const connection: ResolvedClusterConnection = {
       id: "c-1", label: "kind", kind: "kubeconfig", kubeconfigYaml: cluster.kubeconfigYaml,

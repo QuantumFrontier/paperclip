@@ -3,10 +3,11 @@ import { spinUpKind, type KindCluster } from "./_harness.js";
 import { createKubernetesApiClient, ensureTenantNamespace, type ResolvedClusterConnection } from "../../src/index.js";
 
 let cluster: KindCluster;
-beforeAll(() => { cluster = spinUpKind(); }, 240_000);
-afterAll(() => cluster?.cleanup());
 
-describe("ensureTenantNamespace idempotency", () => {
+describe.skipIf(!process.env["K8S_INTEGRATION"])("ensureTenantNamespace idempotency", () => {
+  beforeAll(() => { cluster = spinUpKind(); }, 240_000);
+  afterAll(() => cluster?.cleanup());
+
   it("a second call is a no-op-equivalent — exactly the same set of objects exist", async () => {
     const connection: ResolvedClusterConnection = {
       id: "c-1", label: "kind", kind: "kubeconfig", kubeconfigYaml: cluster.kubeconfigYaml,
