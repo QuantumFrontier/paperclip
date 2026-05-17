@@ -449,8 +449,14 @@ describe("agent issue mutation checkout ownership", () => {
     );
   });
 
-  it("preserves committed document and work product writes when recovery revalidation fails", async () => {
+  it("preserves committed comments, documents, and work product writes when recovery revalidation fails", async () => {
     const app = await createApp(ownerActor());
+
+    mockIssueRecoveryActionService.getActiveForIssue.mockRejectedValueOnce(new Error("revalidation read failed"));
+    await request(app)
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "progress update" })
+      .expect(201);
 
     mockIssueRecoveryActionService.getActiveForIssue.mockRejectedValueOnce(new Error("revalidation read failed"));
     await request(app)
@@ -464,6 +470,12 @@ describe("agent issue mutation checkout ownership", () => {
       .send({ title: "Updated product" })
       .expect(200);
 
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      issueId,
+      "progress update",
+      expect.any(Object),
+      expect.any(Object),
+    );
     expect(mockDocumentService.upsertIssueDocument).toHaveBeenCalled();
     expect(mockWorkProductService.update).toHaveBeenCalledWith("product-1", { title: "Updated product" });
   });

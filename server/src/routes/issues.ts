@@ -4996,7 +4996,7 @@ export function issueRoutes(
       source: "issue.comment",
     });
 
-    await revalidateActiveSourceRecovery({
+    await revalidateActiveSourceRecoveryAfterCommittedWrite({
       issue: currentIssue,
       trigger: "comment",
       actor,
