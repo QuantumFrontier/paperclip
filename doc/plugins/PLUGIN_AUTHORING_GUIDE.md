@@ -291,8 +291,9 @@ export default definePlugin({
 
 Authoring rules:
 
-- Keep keys stable once published. Renaming `agentKey`, `projectKey`, or
-  `routineKey` creates a new managed resource from the host's point of view.
+- Keep keys stable once published. Renaming `agentKey`, `projectKey`,
+  `routineKey`, or `skillKey` creates a new managed resource from the host's
+  point of view.
 - Use managed agents for plugin-provided labor. Use `ctx.agents.invoke()` or
   `ctx.agents.sessions` only after you have a real agent id, either selected by
   the operator or resolved from `ctx.agents.managed`.
@@ -324,6 +325,7 @@ Mount surfaces currently wired in the host include:
 - `settingsPage`
 - `dashboardWidget`
 - `sidebar`
+- `routeSidebar`
 - `sidebarPanel`
 - `detailTab`
 - `taskDetailView`
