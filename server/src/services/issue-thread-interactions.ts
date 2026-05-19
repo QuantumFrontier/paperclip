@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   documents,
@@ -159,7 +159,7 @@ function shouldReturnAcceptedConfirmationToCreatorAgent(args: {
 }
 
 function shouldSupersedeRequestConfirmationOnUserComment(interaction: RequestConfirmationInteraction) {
-  return interaction.payload.supersedeOnUserComment !== false;
+  return interaction.payload.supersedeOnUserComment === true;
 }
 
 function isCommentAtOrAfterInteraction(args: {
@@ -1059,12 +1059,12 @@ export function issueThreadInteractionService(db: Db) {
           .where(and(
             eq(issueComments.companyId, issue.companyId),
             eq(issueComments.issueId, issue.id),
+            isNotNull(issueComments.authorUserId),
           ))
           .orderBy(asc(issueComments.createdAt)),
       ]);
 
-      const userComments = comments.filter((comment) => comment.authorUserId);
-      if (rows.length === 0 || userComments.length === 0) return [];
+      if (rows.length === 0 || comments.length === 0) return [];
 
       const now = new Date();
       const expired: IssueThreadInteraction[] = [];
@@ -1072,7 +1072,7 @@ export function issueThreadInteractionService(db: Db) {
         const interaction = hydrateInteraction(row) as RequestConfirmationInteraction;
         if (!shouldSupersedeRequestConfirmationOnUserComment(interaction)) continue;
 
-        const supersedingComment = userComments.find((comment) => isCommentAtOrAfterInteraction({
+        const supersedingComment = comments.find((comment) => isCommentAtOrAfterInteraction({
           commentCreatedAt: comment.createdAt,
           interactionCreatedAt: row.createdAt,
         }));
