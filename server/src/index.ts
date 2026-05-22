@@ -31,6 +31,7 @@ import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
   feedbackService,
+  backfillPrincipalAccessCompatibility,
   heartbeatService,
   instanceSettingsService,
   reconcilePersistedRuntimeServicesOnStartup,
@@ -513,6 +514,10 @@ export async function startServer(): Promise<StartedServer> {
     | undefined;
   if (config.deploymentMode === "local_trusted") {
     await ensureLocalTrustedBoardPrincipal(db as any);
+  }
+  const accessBackfill = await backfillPrincipalAccessCompatibility(db as any);
+  if (accessBackfill.agentMembershipsInserted > 0 || accessBackfill.humanGrantsInserted > 0) {
+    logger.info(accessBackfill, "Backfilled principal access compatibility records");
   }
   if (config.deploymentMode === "authenticated") {
     const {

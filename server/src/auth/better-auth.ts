@@ -46,20 +46,24 @@ export function buildBetterAuthAdvancedOptions(input: { disableSecureCookies: bo
 
 export function shouldDisableSecureAuthCookies(input: {
   deploymentMode: Config["deploymentMode"];
-  deploymentExposure: Config["deploymentExposure"];
+  deploymentExposure?: Config["deploymentExposure"];
   authBaseUrlMode: Config["authBaseUrlMode"];
   authPublicBaseUrl: string | undefined;
-  publicUrl: string | undefined;
+  publicUrl?: string | undefined;
 }): boolean {
-  const publicUrl = input.publicUrl ?? (
-    input.authBaseUrlMode === "explicit" ? input.authPublicBaseUrl : undefined
+  const publicUrl = (
+    input.publicUrl?.trim() ||
+    process.env.PAPERCLIP_PUBLIC_URL?.trim() ||
+    (input.authBaseUrlMode === "explicit" ? input.authPublicBaseUrl?.trim() : "")
   );
   if (publicUrl) return publicUrl.startsWith("http://");
 
   return (
     input.deploymentMode === "authenticated" &&
-    input.deploymentExposure === "private" &&
-    input.authBaseUrlMode === "auto"
+    (
+      (input.deploymentExposure === "private" && input.authBaseUrlMode === "auto") ||
+      input.deploymentExposure === undefined
+    )
   );
 }
 
@@ -118,13 +122,12 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
       "For local development, set BETTER_AUTH_SECRET=paperclip-dev-secret in your .env file.",
     );
   }
-  const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
   const disableSecureCookies = shouldDisableSecureAuthCookies({
     deploymentMode: config.deploymentMode,
     deploymentExposure: config.deploymentExposure,
     authBaseUrlMode: config.authBaseUrlMode,
     authPublicBaseUrl: config.authPublicBaseUrl,
-    publicUrl,
+    publicUrl: process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl,
   });
 
   const authConfig = {

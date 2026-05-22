@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/shared";
 import {
   createHostClientHandlers,
-  type HostServices,
   JsonRpcCallError,
+  PLUGIN_RPC_ERROR_CODES,
+  type HostServices,
   type HostToWorkerMethods,
 } from "@paperclipai/plugin-sdk";
 import {
@@ -16,8 +17,11 @@ import {
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const DELAYED_WORKER_ENTRYPOINT = path.join(FIXTURES_DIR, "plugin-worker-delayed.cjs");
+const INVOCATION_SCOPE_WORKER_ENTRYPOINT = path.join(
+  FIXTURES_DIR,
+  "plugin-worker-invocation-scope.cjs",
+);
 const TERMINATED_WORKER_ENTRYPOINT = path.join(FIXTURES_DIR, "plugin-worker-terminated.cjs");
-const INVOCATION_SCOPE_WORKER_ENTRYPOINT = path.join(FIXTURES_DIR, "plugin-worker-invocation-scope.cjs");
 
 const TEST_MANIFEST: PaperclipPluginManifestV1 = {
   id: "test.plugin",
@@ -182,14 +186,8 @@ describe("plugin-worker-manager stderr failure context", () => {
     }
   });
 
-  it("passes performAction invocation scope to nested worker host calls", async () => {
-    const companiesGet = vi.fn(async (
-      params: { companyId: string },
-      context?: { invocationScope?: { companyId?: string | null } | null },
-    ) => ({
-      id: params.companyId,
-      scopedCompanyId: context?.invocationScope?.companyId ?? null,
-    }));
+  it("passes echoed invocation scope to worker-to-host handlers", async () => {
+    const companiesGet = vi.fn(async () => ({ id: "company-1" }));
     const handle = createPluginWorkerHandle("test.plugin", {
       entrypointPath: INVOCATION_SCOPE_WORKER_ENTRYPOINT,
       manifest: TEST_MANIFEST,
@@ -200,48 +198,39 @@ describe("plugin-worker-manager stderr failure context", () => {
       },
       apiVersion: 1,
       hostHandlers: {
-        "companies.get": companiesGet as never,
+        "companies.get": companiesGet,
       },
     });
 
     try {
       await handle.start();
 
-      await expect(handle.call("performAction", {
+      await expect(handle.call("getData", {
         key: "probe",
+        companyId: "company-1",
         params: {
           mode: "echo",
-          requestedCompanyId: "company-a",
+          requestedCompanyId: "company-1",
         },
-        actorContext: {
-          type: "agent",
-          userId: null,
-          agentId: "agent-1",
-          runId: "run-1",
-          companyId: "company-a",
-        },
-        renderEnvironment: null,
-      })).resolves.toEqual({
-        id: "company-a",
-        scopedCompanyId: "company-a",
-      });
+      } as HostToWorkerMethods["getData"][0])).resolves.toEqual({ id: "company-1" });
+
       expect(companiesGet).toHaveBeenCalledWith(
-        { companyId: "company-a" },
-        { invocationScope: { companyId: "company-a" } },
+        { companyId: "company-1" },
+        { invocationScope: { companyId: "company-1" } },
       );
     } finally {
       await handle.stop().catch(() => undefined);
     }
   });
 
-  it("applies the active performAction scope when a nested worker host call omits the invocation id", async () => {
-    const handlers = createHostClientHandlers({
+  it("rejects missing or unknown invocation ids while a company invocation is active", async () => {
+    const companiesGet = vi.fn(async () => ({ id: "company-2" }));
+    const hostHandlers = createHostClientHandlers({
       pluginId: "test.plugin",
       capabilities: ["companies.read"],
       services: {
         companies: {
-          list: vi.fn(async () => []),
-          get: vi.fn(async (params: { companyId: string }) => ({ id: params.companyId })),
+          get: companiesGet,
         },
       } as unknown as HostServices,
     });
@@ -254,69 +243,25 @@ describe("plugin-worker-manager stderr failure context", () => {
         hostVersion: "1.0.0",
       },
       apiVersion: 1,
-      hostHandlers: handlers,
+      hostHandlers,
     });
 
     try {
       await handle.start();
 
-      await expect(handle.call("performAction", {
-        key: "probe",
-        params: {
-          requestedCompanyId: "company-b",
-        },
-        actorContext: {
-          type: "agent",
-          userId: null,
-          agentId: "agent-1",
-          runId: "run-1",
-          companyId: "company-a",
-        },
-        renderEnvironment: null,
-      })).rejects.toMatchObject({
-        message: expect.stringContaining("scoped to company \"company-a\""),
-      });
-    } finally {
-      await handle.stop().catch(() => undefined);
-    }
-  });
+      for (const mode of ["omit", "unknown"]) {
+        await expect(handle.call("getData", {
+          key: "probe",
+          companyId: "company-1",
+          params: {
+            mode,
+            requestedCompanyId: "company-2",
+          },
+        } as HostToWorkerMethods["getData"][0])).rejects.toMatchObject({
+          code: PLUGIN_RPC_ERROR_CODES.CAPABILITY_DENIED,
+        });
+      }
 
-  it("rejects nested worker host calls that forge an unknown invocation id", async () => {
-    const companiesGet = vi.fn(async (params: { companyId: string }) => ({ id: params.companyId }));
-    const handle = createPluginWorkerHandle("test.plugin", {
-      entrypointPath: INVOCATION_SCOPE_WORKER_ENTRYPOINT,
-      manifest: TEST_MANIFEST,
-      config: {},
-      instanceInfo: {
-        instanceId: "instance-1",
-        hostVersion: "1.0.0",
-      },
-      apiVersion: 1,
-      hostHandlers: {
-        "companies.get": companiesGet as never,
-      },
-    });
-
-    try {
-      await handle.start();
-
-      await expect(handle.call("performAction", {
-        key: "probe",
-        params: {
-          mode: "unknown",
-          requestedCompanyId: "company-a",
-        },
-        actorContext: {
-          type: "agent",
-          userId: null,
-          agentId: "agent-1",
-          runId: "run-1",
-          companyId: "company-a",
-        },
-        renderEnvironment: null,
-      })).rejects.toMatchObject({
-        message: expect.stringContaining("unknown or expired invocation scope"),
-      });
       expect(companiesGet).not.toHaveBeenCalled();
     } finally {
       await handle.stop().catch(() => undefined);

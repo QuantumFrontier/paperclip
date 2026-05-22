@@ -717,7 +717,7 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
   background: none;
 }
 
-/* Hover actions on fenced code blocks */
+/* Actions for fenced and indented preformatted markdown blocks */
 .paperclip-markdown-codeblock {
   position: relative;
 }
@@ -733,7 +733,7 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
   transition: opacity 0.12s ease;
 }
 
-.paperclip-markdown-codeblock-button {
+.paperclip-markdown-codeblock-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -752,34 +752,27 @@ a.paperclip-mention-chip[data-mention-kind="agent"]::before {
 
 .paperclip-markdown-codeblock:hover .paperclip-markdown-codeblock-actions,
 .paperclip-markdown-codeblock-actions:focus-within,
-.paperclip-markdown-codeblock-actions[data-active] {
+.paperclip-markdown-codeblock-action[data-copied],
+.paperclip-markdown-codeblock-action[data-active] {
   opacity: 1;
 }
 
-.paperclip-markdown-codeblock-button:hover {
+.paperclip-markdown-codeblock-action:hover {
   background-color: var(--accent);
   color: var(--accent-foreground);
 }
 
-.paperclip-markdown-codeblock-wrap {
-  width: 1.55rem;
-  padding-inline: 0;
-}
-
-.paperclip-markdown-codeblock-wrap[data-wrapped] {
+.paperclip-markdown-codeblock-action[data-active],
+.paperclip-markdown-codeblock-action[data-copied] {
   border-color: color-mix(in oklab, var(--primary) 38%, transparent);
   color: var(--primary);
 }
 
-.paperclip-markdown-codeblock-copy[data-copied] {
-  color: var(--primary);
-}
-
-.paperclip-markdown-codeblock-copy[data-failed] {
+.paperclip-markdown-codeblock-action[data-failed] {
   color: var(--destructive);
 }
 
-.paperclip-markdown-codeblock-copy-label {
+.paperclip-markdown-codeblock-action-label {
   font-weight: 500;
 }
 
