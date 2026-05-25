@@ -4,7 +4,7 @@ import { act } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Agent } from "@paperclipai/shared";
+import type { Agent, ResourceMemberships } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarAgents } from "./SidebarAgents";
 
@@ -24,6 +24,7 @@ const mockHeartbeatsApi = vi.hoisted(() => ({
 
 const mockResourceMembershipsApi = vi.hoisted(() => ({
   listMine: vi.fn(),
+  updateAgent: vi.fn(),
 }));
 
 const mockOpenNewAgent = vi.hoisted(() => vi.fn());
@@ -185,6 +186,7 @@ describe("SidebarAgents", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot> | null;
   let queryClient: QueryClient;
+  let memberships: ResourceMemberships;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -201,10 +203,26 @@ describe("SidebarAgents", () => {
       user: { id: "user-1" },
     });
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
-    mockResourceMembershipsApi.listMine.mockResolvedValue({
+    memberships = {
       projectMemberships: {},
       agentMemberships: {},
       updatedAt: null,
+    };
+    mockResourceMembershipsApi.listMine.mockImplementation(() => Promise.resolve(memberships));
+    mockResourceMembershipsApi.updateAgent.mockImplementation((_companyId, agentId, data) => {
+      memberships = {
+        ...memberships,
+        agentMemberships: {
+          ...memberships.agentMemberships,
+          [agentId]: data.state,
+        },
+        updatedAt: new Date(),
+      };
+      return Promise.resolve({
+        resourceType: "agent",
+        resourceId: agentId,
+        state: data.state,
+      });
     });
     localStorage.clear();
   });
@@ -369,6 +387,27 @@ describe("SidebarAgents", () => {
 
     expect(mockAgentsApi.pause).toHaveBeenCalledWith("agent-1", "company-1");
     expect(mockPushToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Agent paused" }));
+  });
+
+  it("offers leave agent from each sidebar agent menu", async () => {
+    await renderSidebarAgents();
+    await openAgentMenu();
+
+    const leaveItem = Array.from(document.body.querySelectorAll('[data-slot="dropdown-menu-item"]'))
+      .find((element) => element.textContent?.includes("Leave agent"));
+    expect(leaveItem).toBeTruthy();
+
+    await act(async () => {
+      leaveItem?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(mockResourceMembershipsApi.updateAgent).toHaveBeenCalledWith(
+      "company-1",
+      "agent-1",
+      { state: "left" },
+    );
+    expect(agentLinkLabels(container)).toEqual([]);
   });
 
   it("shows resume for paused sidebar agents", async () => {

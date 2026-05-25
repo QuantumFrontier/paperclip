@@ -4,7 +4,7 @@ import { act } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Project } from "@paperclipai/shared";
+import type { Project, ResourceMemberships } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarProjects } from "./SidebarProjects";
 
@@ -18,9 +18,11 @@ const mockAuthApi = vi.hoisted(() => ({
 
 const mockResourceMembershipsApi = vi.hoisted(() => ({
   listMine: vi.fn(),
+  updateProject: vi.fn(),
 }));
 
 const mockOpenNewProject = vi.hoisted(() => vi.fn());
+const mockPushToast = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
 const mockPersistOrder = vi.hoisted(() => vi.fn());
 const mockSidebarState = vi.hoisted(() => ({ isMobile: false }));
@@ -71,6 +73,12 @@ vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => ({
     isMobile: mockSidebarState.isMobile,
     setSidebarOpen: mockSetSidebarOpen,
+  }),
+}));
+
+vi.mock("../context/ToastContext", () => ({
+  useToastActions: () => ({
+    pushToast: mockPushToast,
   }),
 }));
 
@@ -178,6 +186,17 @@ async function openProjectsMenu(container: HTMLElement) {
   await flushReact();
 }
 
+async function openProjectMenu(label = "Open actions for Alpha") {
+  const trigger = document.body.querySelector(`button[aria-label="${label}"]`);
+  expect(trigger).not.toBeNull();
+
+  await act(async () => {
+    trigger?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await flushReact();
+}
+
 async function chooseSortMode(label: string) {
   const item = Array.from(document.body.querySelectorAll('[data-slot="dropdown-menu-radio-item"]'))
     .find((element) => element.textContent?.includes(label));
@@ -193,6 +212,7 @@ describe("SidebarProjects", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot> | null;
   let queryClient: QueryClient;
+  let memberships: ResourceMemberships;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -246,10 +266,26 @@ describe("SidebarProjects", () => {
       session: { id: "session-1", userId: "user-1" },
       user: { id: "user-1" },
     });
-    mockResourceMembershipsApi.listMine.mockResolvedValue({
+    memberships = {
       projectMemberships: {},
       agentMemberships: {},
       updatedAt: null,
+    };
+    mockResourceMembershipsApi.listMine.mockImplementation(() => Promise.resolve(memberships));
+    mockResourceMembershipsApi.updateProject.mockImplementation((_companyId, projectId, data) => {
+      memberships = {
+        ...memberships,
+        projectMemberships: {
+          ...memberships.projectMemberships,
+          [projectId]: data.state,
+        },
+        updatedAt: new Date(),
+      };
+      return Promise.resolve({
+        resourceType: "project",
+        resourceId: projectId,
+        state: data.state,
+      });
     });
   });
 
@@ -366,6 +402,27 @@ describe("SidebarProjects", () => {
     });
     await flushReact();
 
+    expect(projectLinkLabels(container)).toEqual(["Bravo", "Charlie"]);
+  });
+
+  it("offers leave project from each sidebar project menu", async () => {
+    await renderSidebarProjects();
+    await openProjectMenu();
+
+    const leaveItem = Array.from(document.body.querySelectorAll('[data-slot="dropdown-menu-item"]'))
+      .find((element) => element.textContent?.includes("Leave project"));
+    expect(leaveItem).toBeTruthy();
+
+    await act(async () => {
+      leaveItem?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    expect(mockResourceMembershipsApi.updateProject).toHaveBeenCalledWith(
+      "company-1",
+      "project-a",
+      { state: "left" },
+    );
     expect(projectLinkLabels(container)).toEqual(["Bravo", "Charlie"]);
   });
 });
