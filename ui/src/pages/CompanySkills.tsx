@@ -42,6 +42,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -65,6 +69,7 @@ import {
   Code2,
   Download,
   Eye,
+  Filter,
   FileCode2,
   FileText,
   Folder,
@@ -321,22 +326,7 @@ function classifySource(skill: { sourceBadge: CompanySkillSourceBadge; sourceTyp
   return "company";
 }
 
-function sourceFilterIcon(filter: SourceFilter) {
-  switch (filter) {
-    case "company":
-      return Paperclip;
-    case "bundled":
-      return Boxes;
-    case "optional":
-      return Boxes;
-    case "external":
-      return Globe;
-    default:
-      return null;
-  }
-}
-
-function SourceFilterChips({
+function SourceFilterMenu({
   counts,
   value,
   onChange,
@@ -346,35 +336,89 @@ function SourceFilterChips({
   onChange: (next: SourceFilter) => void;
 }) {
   const filters: SourceFilter[] = ["all", "company", "bundled", "optional", "external"];
+  const activeFilterCount = value === "all" ? 0 : 1;
   return (
-    <div role="radiogroup" aria-label="Filter skills by source" className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1">
-      {filters.map((filter) => {
-        const Icon = sourceFilterIcon(filter);
-        const isActive = value === filter;
-        return (
-          <button
-            key={filter}
-            type="button"
-            role="radio"
-            aria-checked={isActive}
-            onClick={() => onChange(filter)}
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
-              isActive
-                ? "border-foreground/30 bg-accent text-accent-foreground"
-                : "border-border text-muted-foreground hover:bg-accent/40 hover:text-foreground",
-              filter === "optional" && !isActive && "opacity-80",
-            )}
-          >
-            {Icon ? (
-              <Icon className={cn("h-3 w-3", filter === "optional" && "opacity-70")} aria-hidden="true" />
-            ) : null}
-            <span>{SOURCE_FILTER_LABELS[filter]}</span>
-            <span className="text-[10px] text-muted-foreground">{counts[filter] ?? 0}</span>
-          </button>
-        );
-      })}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn("relative shrink-0", activeFilterCount > 0 && "text-blue-600 dark:text-blue-400")}
+          title={activeFilterCount > 0 ? `Filters: ${activeFilterCount}` : "Filter"}
+        >
+          <Filter className="h-3.5 w-3.5" />
+          {activeFilterCount > 0 ? (
+            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-blue-600 text-[9px] font-bold text-white">
+              {activeFilterCount}
+            </span>
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuLabel>Source</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as SourceFilter)}>
+          {filters.map((filter) => (
+            <DropdownMenuRadioItem key={filter} value={filter}>
+              <span>{SOURCE_FILTER_LABELS[filter]}</span>
+              <span className="ml-auto text-xs text-muted-foreground">{counts[filter] ?? 0}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function CatalogFilterMenu({
+  kindFilter,
+  categoryFilter,
+  categories,
+  onKindChange,
+  onCategoryChange,
+}: {
+  kindFilter: "all" | "bundled" | "optional";
+  categoryFilter: string;
+  categories: string[];
+  onKindChange: (next: "all" | "bundled" | "optional") => void;
+  onCategoryChange: (next: string) => void;
+}) {
+  const activeFilterCount = (kindFilter === "all" ? 0 : 1) + (categoryFilter ? 1 : 0);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn("relative shrink-0", activeFilterCount > 0 && "text-blue-600 dark:text-blue-400")}
+          title={activeFilterCount > 0 ? `Filters: ${activeFilterCount}` : "Filter"}
+        >
+          <Filter className="h-3.5 w-3.5" />
+          {activeFilterCount > 0 ? (
+            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-blue-600 text-[9px] font-bold text-white">
+              {activeFilterCount}
+            </span>
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-[min(28rem,70vh)] w-56 overflow-y-auto">
+        <DropdownMenuLabel>Type</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={kindFilter} onValueChange={(next) => onKindChange(next as "all" | "bundled" | "optional")}>
+          <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="bundled">Bundled</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="optional">Optional</DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Category</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={categoryFilter || "__all__"} onValueChange={(next) => onCategoryChange(next === "__all__" ? "" : next)}>
+          <DropdownMenuRadioItem value="__all__">All categories</DropdownMenuRadioItem>
+          {categories.map((category) => (
+            <DropdownMenuRadioItem key={category} value={category}>
+              {category}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -519,7 +563,6 @@ function NewSkillForm({
 
 function CatalogList({
   skills,
-  installedByKey,
   kindFilter,
   categoryFilter,
   catalogFilter,
@@ -527,7 +570,6 @@ function CatalogList({
   onSelect,
 }: {
   skills: CatalogSkill[];
-  installedByKey: Map<string, CompanySkillListItem>;
   kindFilter: "all" | "bundled" | "optional";
   categoryFilter: string;
   catalogFilter: string;
@@ -555,38 +597,18 @@ function CatalogList({
   const optional = filtered.filter((skill) => skill.kind === "optional");
 
   function renderRow(skill: CatalogSkill) {
-    const installed = installedByKey.get(skill.key);
     const isSelected = selectedCatalogRef === skill.id || selectedCatalogRef === skill.key;
-    const Icon = skill.kind === "bundled" ? Boxes : Boxes;
     return (
       <button
         key={skill.id}
         type="button"
         onClick={() => onSelect(skill.id)}
         className={cn(
-          "grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 border-b border-border px-3 py-2 text-left hover:bg-accent/30",
+          "w-full border-b border-border px-3 py-2 text-left hover:bg-accent/30",
           isSelected && "bg-accent/40",
         )}
       >
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Icon className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground", skill.kind === "optional" && "opacity-70")} aria-hidden="true" />
-            <span className="truncate text-[13px] font-medium leading-5">{skill.name}</span>
-          </div>
-          <div className="mt-0.5 truncate text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            {skill.kind} · {skill.category}
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-0.5">
-          {skill.defaultInstall ? (
-            <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] text-cyan-200">
-              Default
-            </span>
-          ) : null}
-          {installed ? (
-            <span className="text-[10px] text-muted-foreground">installed</span>
-          ) : null}
-        </div>
+        <span className="block truncate text-[13px] font-medium leading-5">{skill.name}</span>
       </button>
     );
   }
@@ -1219,8 +1241,6 @@ function SkillList({
       {filteredSkills.map((skill) => {
         const expanded = expandedSkillId === skill.id;
         const tree = buildTree(skill.fileInventory);
-        const source = sourceMeta(skill.sourceBadge, skill.sourceLabel);
-        const SourceIcon = source.icon;
 
         return (
           <div key={skill.id} className="border-b border-border">
@@ -1235,32 +1255,9 @@ function SkillList({
                 className="flex min-w-0 items-center self-stretch pr-2 text-left no-underline"
                 onClick={() => onSelectSkill(skill.id)}
               >
-                <span className="flex min-w-0 items-center gap-2 self-center">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground opacity-75 transition-opacity group-hover:opacity-100">
-                        <SourceIcon className="h-3.5 w-3.5" />
-                        <span className="sr-only">{source.managedLabel}</span>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">{source.managedLabel}</TooltipContent>
-                  </Tooltip>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="min-w-0 overflow-hidden text-[13px] font-medium leading-5 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3]">
-                      {skill.name}
-                    </span>
-                    {(() => {
-                      const skillSource = classifySource(skill as CompanySkillListItem & { metadata?: Record<string, unknown> | null });
-                      if (skillSource === "company") return null;
-                      const label = skillSource === "external"
-                        ? `EXTERNAL · ${skill.sourceLabel ?? skill.sourceType}`
-                        : `${skillSource.toUpperCase()} · ${skill.sourceLabel ?? "catalog"}`;
-                      return (
-                        <span className="mt-0.5 truncate text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                          {label}
-                        </span>
-                      );
-                    })()}
+                <span className="flex min-w-0 items-center self-center">
+                  <span className="min-w-0 overflow-hidden text-[13px] font-medium leading-5 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3]">
+                    {skill.name}
                   </span>
                 </span>
               </Link>
@@ -2267,14 +2264,14 @@ export function CompanySkills() {
       />
 
       <div className="flex min-h-[calc(100vh-12rem)] flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 pt-3 pb-[5px]">
           <Tabs value={activeView} onValueChange={(value) => setViewParam(value === "catalog" ? "catalog" : "installed")}>
-            <TabsList variant="line">
-              <TabsTrigger value="installed">
+            <TabsList variant="line" className="p-0">
+              <TabsTrigger value="installed" className="px-0 pr-4">
                 <span>Installed</span>
                 <span className="ml-1.5 text-[11px] text-muted-foreground">{installedSkills.length}</span>
               </TabsTrigger>
-              <TabsTrigger value="catalog">
+              <TabsTrigger value="catalog" className="px-0 pr-4">
                 <span>Catalog</span>
                 <span className="ml-1.5 text-[11px] text-muted-foreground">{catalogListQuery.data?.length ?? 0}</span>
               </TabsTrigger>
@@ -2347,10 +2344,7 @@ export function CompanySkills() {
                     placeholder="Filter skills"
                     className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                   />
-                </div>
-
-                <div className="mt-3">
-                  <SourceFilterChips counts={sourceCounts} value={sourceFilter} onChange={setSourceFilter} />
+                  <SourceFilterMenu counts={sourceCounts} value={sourceFilter} onChange={setSourceFilter} />
                 </div>
 
                 <div className="mt-3 flex items-center gap-2 border-b border-border pb-2">
@@ -2479,37 +2473,13 @@ export function CompanySkills() {
                     placeholder="Search catalog"
                     className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                   />
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                  {(["all", "bundled", "optional"] as const).map((kind) => (
-                    <button
-                      key={kind}
-                      type="button"
-                      onClick={() => setCatalogKindFilter(kind)}
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
-                        catalogKindFilter === kind
-                          ? "border-foreground/30 bg-accent text-accent-foreground"
-                          : "border-border text-muted-foreground hover:bg-accent/40",
-                      )}
-                    >
-                      {kind === "all" ? "All" : kind === "bundled" ? "Bundled" : "Optional"}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="mt-3">
-                  <select
-                    value={catalogCategoryFilter}
-                    onChange={(event) => setCatalogCategoryFilter(event.target.value)}
-                    className="h-8 w-full rounded-md border border-border bg-transparent px-2 text-xs"
-                  >
-                    <option value="">All categories</option>
-                    {catalogCategories.map((category) => (
-                      <option key={category} value={category}>{category}</option>
-                    ))}
-                  </select>
+                  <CatalogFilterMenu
+                    kindFilter={catalogKindFilter}
+                    categoryFilter={catalogCategoryFilter}
+                    categories={catalogCategories}
+                    onKindChange={setCatalogKindFilter}
+                    onCategoryChange={setCatalogCategoryFilter}
+                  />
                 </div>
               </div>
 
@@ -2520,7 +2490,6 @@ export function CompanySkills() {
               ) : (
                 <CatalogList
                   skills={catalogListQuery.data ?? []}
-                  installedByKey={installedByKey}
                   kindFilter={catalogKindFilter}
                   categoryFilter={catalogCategoryFilter}
                   catalogFilter={catalogFilter}
