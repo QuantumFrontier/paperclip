@@ -1,5 +1,5 @@
 import { buffer } from "node:stream/consumers";
-import { and, desc, eq, isNotNull, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import {
@@ -32,6 +32,7 @@ import type { StorageService } from "../storage/types.js";
 const TEXT_PREVIEW_BYTES = 4096;
 const PREVIEW_TEXT_MAX_LENGTH = 280;
 const GROUP_PREVIEW_ARTIFACT_LIMIT = 3;
+const GROUPED_ARTIFACT_FETCH_LIMIT = COMPANY_ARTIFACTS_MAX_LIMIT * 10;
 
 type ArtifactCursor = {
   updatedAt: string;
@@ -191,19 +192,33 @@ function pageByCursor<T extends { id: string; updatedAt: string }>(
   return { page, nextCursor };
 }
 
-async function loadIssueGroupingRows(db: Db, companyId: string) {
-  const rows = await db
-    .select({
-      id: issues.id,
-      parentId: issues.parentId,
-      identifier: issues.identifier,
-      title: issues.title,
-      updatedAt: issues.updatedAt,
-    })
-    .from(issues)
-    .where(eq(issues.companyId, companyId));
+async function loadIssueGroupingRows(db: Db, companyId: string, seedIssueIds: Iterable<string>) {
+  const rowsById = new Map<string, IssueGroupingRow>();
+  let pending = [...new Set(seedIssueIds)];
 
-  return new Map(rows.map((row): [string, IssueGroupingRow] => [row.id, row]));
+  while (pending.length > 0) {
+    const rows = await db
+      .select({
+        id: issues.id,
+        parentId: issues.parentId,
+        identifier: issues.identifier,
+        title: issues.title,
+        updatedAt: issues.updatedAt,
+      })
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), inArray(issues.id, pending)));
+
+    const nextPending = new Set<string>();
+    for (const row of rows) {
+      rowsById.set(row.id, row);
+      if (row.parentId && !rowsById.has(row.parentId)) {
+        nextPending.add(row.parentId);
+      }
+    }
+    pending = [...nextPending];
+  }
+
+  return rowsById;
 }
 
 function getIssueSummary(issue: IssueGroupingRow) {
@@ -312,6 +327,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
       if (!company) throw notFound("Company not found");
 
       const fetchLimit = Math.min(query.limit + 1, COMPANY_ARTIFACTS_MAX_LIMIT + 1);
+      const sourceFetchLimit = groupBy ? GROUPED_ARTIFACT_FETCH_LIMIT : fetchLimit;
       const q = query.q ? `%${escapeLikePattern(query.q)}%` : null;
       const artifacts: CompanyArtifact[] = [];
       const workProductAttachmentIds = new Set<string>();
@@ -328,6 +344,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
         ];
         const documentCursor = groupBy ? undefined : cursorCondition(sql<Date>`${documents.updatedAt}`, documentArtifactId, cursor);
         if (documentCursor) documentConditions.push(documentCursor);
+        if (groupBy === "task" && query.groupIssueId) documentConditions.push(eq(issues.id, query.groupIssueId));
         if (query.projectId) documentConditions.push(eq(issues.projectId, query.projectId));
         if (q) {
           documentConditions.push(sql`(
@@ -392,7 +409,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
           )
           .where(and(...documentConditions))
           .orderBy(desc(documents.updatedAt), desc(documentArtifactId));
-        const documentRows = groupBy ? await documentRowsQuery : await documentRowsQuery.limit(fetchLimit);
+        const documentRows = await documentRowsQuery.limit(sourceFetchLimit);
 
         for (const row of documentRows) {
           const identifier = row.issueIdentifier ?? row.issueId;
@@ -432,6 +449,11 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
           : cursorCondition(sql<Date>`${issueWorkProducts.updatedAt}`, workProductArtifactId, cursor);
         const workProductKind = contentTypeKindCondition(workProductContentType, query.kind);
         if (workProductCursor) workProductConditions.push(workProductCursor);
+        if (groupBy === "task" && query.groupIssueId) {
+          const selectedIssueCondition = eq(issues.id, query.groupIssueId);
+          workProductBaseConditions.push(selectedIssueCondition);
+          workProductConditions.push(selectedIssueCondition);
+        }
         if (workProductKind) {
           workProductBaseConditions.push(workProductKind);
           workProductConditions.push(workProductKind);
@@ -499,7 +521,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
           )
           .where(and(...workProductConditions))
           .orderBy(desc(issueWorkProducts.updatedAt), desc(workProductArtifactId));
-        const workProductRows = groupBy ? await workProductRowsQuery : await workProductRowsQuery.limit(fetchLimit);
+        const workProductRows = await workProductRowsQuery.limit(sourceFetchLimit);
 
         const workProductAttachmentRows = await db
           .select({
@@ -513,7 +535,8 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
               eq(issues.companyId, issueWorkProducts.companyId),
             ),
           )
-          .where(and(...workProductBaseConditions, sql`${issueWorkProducts.metadata}->>'attachmentId' IS NOT NULL`));
+          .where(and(...workProductBaseConditions, sql`${issueWorkProducts.metadata}->>'attachmentId' IS NOT NULL`))
+          .limit(sourceFetchLimit);
 
         for (const row of workProductAttachmentRows) {
           if (row.attachmentId) {
@@ -561,6 +584,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
           : cursorCondition(sql<Date>`${issueAttachments.updatedAt}`, attachmentArtifactId, cursor);
         const attachmentKind = contentTypeKindCondition(sql<string>`${assets.contentType}`, query.kind);
         if (attachmentCursor) attachmentConditions.push(attachmentCursor);
+        if (groupBy === "task" && query.groupIssueId) attachmentConditions.push(eq(issues.id, query.groupIssueId));
         if (attachmentKind) attachmentConditions.push(attachmentKind);
         if (query.projectId) attachmentConditions.push(eq(issues.projectId, query.projectId));
         if (q) {
@@ -620,7 +644,7 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
           )
           .where(and(...attachmentConditions))
           .orderBy(desc(issueAttachments.updatedAt), desc(attachmentArtifactId));
-        const attachmentRows = groupBy ? await attachmentRowsQuery : await attachmentRowsQuery.limit(fetchLimit);
+        const attachmentRows = await attachmentRowsQuery.limit(sourceFetchLimit);
 
         const attachmentArtifacts = await Promise.all(attachmentRows.map(async (row): Promise<CompanyArtifact | null> => {
           if (workProductAttachmentIds.has(row.attachmentId)) return null;
@@ -666,7 +690,9 @@ export function companyArtifactsService(db: Db, storage?: StorageService) {
         return { artifacts: page, nextCursor };
       }
 
-      const issueRows = await loadIssueGroupingRows(db, companyId);
+      const issueSeedIds = new Set(artifacts.map((artifact) => artifact.issue.id));
+      if (query.groupIssueId) issueSeedIds.add(query.groupIssueId);
+      const issueRows = await loadIssueGroupingRows(db, companyId, issueSeedIds);
       const groups = buildArtifactGroups({
         artifacts: sorted,
         companyPrefix: company.issuePrefix,
