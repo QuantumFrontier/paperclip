@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import type {
   Agent,
   CompanyDocument,
+  DocumentReviewIndexCounts,
   DocumentSuggestionKind,
   DocumentSuggestionWithComments,
   DocumentType,
@@ -12,6 +13,7 @@ import {
   AlertTriangle,
   BarChart3,
   BookOpen,
+  Check,
   ClipboardList,
   FileText,
   History,
@@ -38,6 +40,8 @@ import { cn, relativeTime } from "@/lib/utils";
 import { EmptyState } from "@/components/EmptyState";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Identity } from "@/components/Identity";
+import { InlineEditor } from "@/components/InlineEditor";
+import { useOptionalToastActions } from "@/context/ToastContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -70,10 +74,14 @@ import {
 } from "@/components/DocumentAnnotationLayer";
 import { DocumentDiffModal } from "@/components/DocumentDiffModal";
 import { DocumentReviewRail } from "@/components/documents/DocumentReviewRail";
+import {
+  DoneReviewingDialog,
+  type DoneReviewingHandoff,
+} from "@/components/documents/DoneReviewingDialog";
 import { SelectionToolbar, type SuggestionDraftIntent } from "@/components/documents/SelectionToolbar";
 import type { RailThread } from "@/components/documents/DocumentThreadCard";
 
-const DOC_TYPE_ICON: Record<DocumentType, typeof FileText> = {
+export const DOC_TYPE_ICON: Record<DocumentType, typeof FileText> = {
   plan: ListTodo,
   spec: BookOpen,
   brief: ClipboardList,
@@ -104,8 +112,10 @@ function resolveIssueBinding(doc: CompanyDocument | undefined): IssueBinding | n
 
 export function DocumentDetail() {
   const { documentId } = useParams<{ documentId: string }>();
+  const [searchParams] = useSearchParams();
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const toast = useOptionalToastActions();
   const queryClient = useQueryClient();
 
   const [editMode, setEditMode] = useState(false);
@@ -113,6 +123,7 @@ export function DocumentDetail() {
   const [baseRevisionId, setBaseRevisionId] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [commentDraft, setCommentDraft] = useState<{ anchor: PendingAnchor } | null>(null);
@@ -120,6 +131,7 @@ export function DocumentDetail() {
   const [suggestDraft, setSuggestDraft] = useState<{ anchor: PendingAnchor; intent: SuggestionDraftIntent } | null>(null);
   const [proposed, setProposed] = useState("");
   const containerRef = useRef<HTMLElement | null>(null);
+  const finishAfterSaveRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
@@ -181,12 +193,25 @@ export function DocumentDetail() {
       ? userProfileMap.get(doc.lockedByUserId)?.label ?? "a board member"
       : null;
 
+  // `from=issue:<identifier>` deep links the breadcrumb back to the source issue
+  // so reviewers who opened the doc from an issue land back where they came from.
+  const fromParam = searchParams.get("from");
+  const fromIssueIdentifier = fromParam?.startsWith("issue:") ? fromParam.slice("issue:".length) : null;
   useEffect(() => {
-    setBreadcrumbs([
-      { label: "Documents", href: "/documents" },
-      { label: doc?.title ?? "Document" },
-    ]);
-  }, [setBreadcrumbs, doc?.title]);
+    const title = doc?.title ?? "Document";
+    if (fromIssueIdentifier) {
+      setBreadcrumbs([
+        { label: "Issues", href: "/issues" },
+        { label: fromIssueIdentifier, href: `/issues/${fromIssueIdentifier}` },
+        { label: title },
+      ]);
+    } else {
+      setBreadcrumbs([
+        { label: "Documents", href: "/documents" },
+        { label: title },
+      ]);
+    }
+  }, [setBreadcrumbs, doc?.title, fromIssueIdentifier]);
 
   const invalidateReview = useCallback(() => {
     if (binding) {
@@ -240,6 +265,12 @@ export function DocumentDetail() {
     onSuccess: invalidateDoc,
   });
 
+  const titleMutation = useMutation({
+    mutationFn: (title: string) =>
+      documentsApi.updateMetadata(selectedCompanyId!, documentId!, { title: title || null }),
+    onSuccess: invalidateDoc,
+  });
+
   const saveMutation = useMutation({
     mutationFn: (body: string) =>
       issuesApi.upsertDocument(binding!.issueId, binding!.key, {
@@ -252,9 +283,66 @@ export function DocumentDetail() {
       setConflict(false);
       invalidateDoc();
       invalidateReview();
+      if (finishAfterSaveRef.current) {
+        finishAfterSaveRef.current = false;
+        setHandoffOpen(true);
+      }
     },
     onError: (error) => {
+      finishAfterSaveRef.current = false;
       if (error instanceof ApiError && error.status === 409) setConflict(true);
+    },
+  });
+
+  // "Done reviewing" handoff. There is no dedicated review-events endpoint
+  // (confirmed against PAP-10523 / the document-feedback contract): the handoff
+  // is the issue thread. We record the overall note as a document review thread,
+  // optionally post a summary comment on the linked issue (wakes the assignee),
+  // and optionally fire a request_confirmation against the latest revision so the
+  // owner picks the review back up.
+  const reviewHandoff = useMutation({
+    mutationFn: async (handoff: DoneReviewingHandoff) => {
+      if (!binding || !doc) return;
+      const counts = reviewIndex?.counts;
+      const summary = buildHandoffComment(doc, counts, handoff.overallComment);
+
+      if (handoff.overallComment) {
+        await documentReviewsApi.createReviewThread(binding.issueId, binding.key, {
+          body: handoff.overallComment,
+        });
+      }
+      if (handoff.commentOnLinkedIssue) {
+        await issuesApi.addComment(binding.issueId, summary);
+      }
+      if (handoff.wakeOwner && doc.latestRevisionId) {
+        await issuesApi.createInteraction(binding.issueId, {
+          kind: "request_confirmation",
+          idempotencyKey: `confirmation:${binding.issueId}:doc-review:${binding.key}:${doc.latestRevisionId}`,
+          title: `Review complete: ${doc.title ?? "document"}`.slice(0, 240),
+          summary: summary.slice(0, 1000),
+          continuationPolicy: "wake_assignee_on_accept",
+          payload: {
+            version: 1,
+            prompt: "A reviewer finished reviewing this document. Pick the feedback back up when ready.",
+            acceptLabel: "Got it",
+            rejectLabel: "Dismiss",
+            target: {
+              type: "issue_document",
+              issueId: binding.issueId,
+              key: binding.key,
+              revisionId: doc.latestRevisionId,
+            },
+          },
+        });
+      }
+    },
+    onSuccess: () => {
+      setHandoffOpen(false);
+      invalidateReview();
+      toast?.pushToast({ title: "Review handed off", tone: "success" });
+    },
+    onError: () => {
+      toast?.pushToast({ title: "Couldn't complete the handoff", tone: "error" });
     },
   });
 
@@ -325,6 +413,21 @@ export function DocumentDetail() {
     [binding, invalidateReview],
   );
 
+  // "Resolve" = handled outside / no longer applies. The suggestion data model
+  // only has pending/accepted/rejected today, so we record it as a reject with a
+  // clear non-disagreement reason for the audit trail. A first-class `resolved`
+  // status is tracked as a follow-up (child of PAP-10524).
+  const resolveSuggestion = useCallback(
+    async (suggestion: DocumentSuggestionWithComments) => {
+      if (!binding) return;
+      await documentReviewsApi.rejectSuggestion(binding.issueId, binding.key, suggestion.id, {
+        reason: "Resolved — handled outside review / no longer applies.",
+      });
+      invalidateReview();
+    },
+    [binding, invalidateReview],
+  );
+
   const startEdit = useCallback(() => {
     if (!doc) return;
     setDraft(doc.body);
@@ -377,15 +480,26 @@ export function DocumentDetail() {
             doc={doc}
             TypeIcon={TypeIcon}
             ownerName={ownerAgent?.name ?? null}
+            ownerAgentId={doc.ownerAgentId}
             canEdit={canEdit}
+            canReview={canReview}
             isBoard={isBoard}
             editMode={editMode}
             lockedByMe={lockedByMe}
             lockedByOther={lockedByOther}
             lockHolderName={lockHolderName}
             onEdit={startEdit}
+            onSuggestEdit={() => {
+              setRailOpen(true);
+              toast?.pushToast({
+                title: "Select text in the document, then choose Suggest edit",
+                tone: "info",
+              });
+            }}
+            onSaveTitle={(title) => titleMutation.mutateAsync(title)}
             onHistory={() => setDiffOpen(true)}
             onToggleLock={() => lockMutation.mutate(!lockedByMe)}
+            onCopyLink={() => toast?.pushToast({ title: "Link copied", tone: "success" })}
             lockPending={lockMutation.isPending}
           />
 
@@ -393,37 +507,41 @@ export function DocumentDetail() {
             <div
               role="alert"
               data-testid="document-conflict-banner"
-              className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+              className="mx-4 mb-3 flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 sm:flex-row sm:items-center sm:justify-between dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
             >
-              <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="flex-1">Someone updated this document while you were editing.</span>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setDiffOpen(true)}>
-                View their changes
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                onClick={() => {
-                  setBaseRevisionId(doc.latestRevisionId);
-                  setConflict(false);
-                }}
-              >
-                Rebase my draft
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 text-xs text-destructive hover:text-destructive"
-                onClick={() => {
-                  setDraft(doc.body);
-                  setBaseRevisionId(doc.latestRevisionId);
-                  setConflict(false);
-                  setEditMode(false);
-                }}
-              >
-                Discard mine
-              </Button>
+              <div className="flex min-w-0 items-center gap-2 text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>Someone updated this document while you were editing.</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setDiffOpen(true)}>
+                  View their changes
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  onClick={() => {
+                    setBaseRevisionId(doc.latestRevisionId);
+                    setConflict(false);
+                  }}
+                >
+                  Rebase my draft
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-destructive hover:text-destructive"
+                  onClick={() => {
+                    setDraft(doc.body);
+                    setBaseRevisionId(doc.latestRevisionId);
+                    setConflict(false);
+                    setEditMode(false);
+                  }}
+                >
+                  Discard mine
+                </Button>
+              </div>
             </div>
           ) : null}
 
@@ -438,10 +556,26 @@ export function DocumentDetail() {
                     </Button>
                     <Button
                       size="sm"
+                      variant="outline"
                       disabled={saveMutation.isPending}
-                      onClick={() => saveMutation.mutate(draft)}
+                      onClick={() => {
+                        finishAfterSaveRef.current = false;
+                        saveMutation.mutate(draft);
+                      }}
+                      data-testid="save-draft"
                     >
                       Save draft
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={saveMutation.isPending}
+                      onClick={() => {
+                        finishAfterSaveRef.current = true;
+                        saveMutation.mutate(draft);
+                      }}
+                      data-testid="save-finish-review"
+                    >
+                      Save + finish review
                     </Button>
                   </div>
                 </div>
@@ -517,8 +651,10 @@ export function DocumentDetail() {
               onAddOverallComment={canReview ? addOverallComment : undefined}
               onAcceptSuggestion={acceptSuggestion}
               onRejectSuggestion={rejectSuggestion}
+              onResolveSuggestion={resolveSuggestion}
               onReplySuggestion={replySuggestion}
               onViewSuggestionDiff={() => setDiffOpen(true)}
+              onDoneReviewing={() => setHandoffOpen(true)}
             />
           </div>
         ) : null}
@@ -552,8 +688,13 @@ export function DocumentDetail() {
               onAddOverallComment={canReview ? addOverallComment : undefined}
               onAcceptSuggestion={acceptSuggestion}
               onRejectSuggestion={rejectSuggestion}
+              onResolveSuggestion={resolveSuggestion}
               onReplySuggestion={replySuggestion}
               onViewSuggestionDiff={() => setDiffOpen(true)}
+              onDoneReviewing={() => {
+                setRailOpen(false);
+                setHandoffOpen(true);
+              }}
             />
           </>
         ) : null}
@@ -626,6 +767,17 @@ export function DocumentDetail() {
         </DialogContent>
       </Dialog>
 
+      <DoneReviewingDialog
+        open={handoffOpen}
+        onOpenChange={setHandoffOpen}
+        counts={reviewIndex?.counts}
+        issueIdentifier={doc.backlinks.find((b) => b.identifier && b.targetType === "issue")?.identifier ?? null}
+        ownerName={ownerAgent?.name ?? null}
+        canWakeOwner={!!doc.ownerAgentId && !!doc.latestRevisionId}
+        submitting={reviewHandoff.isPending}
+        onSubmit={(handoff) => reviewHandoff.mutate(handoff)}
+      />
+
       {binding ? (
         <DocumentDiffModal
           issueId={binding.issueId}
@@ -645,37 +797,71 @@ function suggestionDialogTitle(kind?: DocumentSuggestionKind): string {
   return "Replace selection";
 }
 
-interface DocumentHeaderProps {
+/** Markdown summary posted to the linked issue / interaction on review completion. */
+function buildHandoffComment(
+  doc: CompanyDocument,
+  counts: DocumentReviewIndexCounts | undefined,
+  overallComment: string,
+): string {
+  const openComments = (counts?.openAnchoredThreads ?? 0) + (counts?.openReviewThreads ?? 0);
+  const lines = [
+    `## Review complete: ${doc.title ?? "document"}`,
+    "",
+    `Reviewed **rev ${doc.latestRevisionNumber}**.`,
+    "",
+    `- Open comments: ${openComments}`,
+    `- Pending suggestions: ${counts?.pendingSuggestions ?? 0}`,
+    `- Stale anchors: ${counts?.staleAnchors ?? 0}`,
+    `- Orphaned anchors: ${counts?.orphanedAnchors ?? 0}`,
+  ];
+  if (overallComment) {
+    lines.push("", `**Overall:** ${overallComment}`);
+  }
+  return lines.join("\n");
+}
+
+export interface DocumentHeaderProps {
   doc: CompanyDocument;
   TypeIcon: typeof FileText;
   ownerName: string | null;
+  ownerAgentId: string | null;
   canEdit: boolean;
+  canReview: boolean;
   isBoard: boolean;
   editMode: boolean;
   lockedByMe: boolean;
   lockedByOther: boolean;
   lockHolderName: string | null;
   onEdit: () => void;
+  onSuggestEdit: () => void;
+  onSaveTitle: (title: string) => Promise<unknown>;
   onHistory: () => void;
   onToggleLock: () => void;
+  onCopyLink: () => void;
   lockPending: boolean;
 }
 
-function DocumentHeader({
+export function DocumentHeader({
   doc,
   TypeIcon,
   ownerName,
+  ownerAgentId,
   canEdit,
+  canReview,
   isBoard,
   editMode,
   lockedByMe,
   lockedByOther,
   lockHolderName,
   onEdit,
+  onSuggestEdit,
+  onSaveTitle,
   onHistory,
   onToggleLock,
+  onCopyLink,
   lockPending,
 }: DocumentHeaderProps) {
+  const [copied, setCopied] = useState(false);
   const backlinks = doc.backlinks.filter((b) => b.identifier);
   const shownBacklinks = backlinks.slice(0, 5);
   const extraBacklinks = backlinks.length - shownBacklinks.length;
@@ -684,21 +870,45 @@ function DocumentHeader({
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       navigator.clipboard.writeText(window.location.href).catch(() => {});
     }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+    onCopyLink();
   };
 
   return (
     <header className="px-4 pt-4">
       <div className="mb-1 flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-bold text-foreground">{doc.title ?? "Untitled document"}</h1>
+        {canEdit ? (
+          <InlineEditor
+            value={doc.title ?? ""}
+            onSave={(next) => onSaveTitle(next.trim())}
+            as="h1"
+            nullable
+            placeholder="Untitled document"
+            className="text-xl font-bold text-foreground"
+          />
+        ) : (
+          <h1 className="text-xl font-bold text-foreground">{doc.title ?? "Untitled document"}</h1>
+        )}
         <StatusBadge status={doc.status} />
         <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
           <TypeIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {DOC_TYPE_LABEL[doc.documentType]}
         </span>
         {ownerName ? (
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <Identity name={ownerName} size="sm" />
-          </span>
+          ownerAgentId ? (
+            <Link
+              to={`/documents?owner=${ownerAgentId}`}
+              className="inline-flex items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground"
+              title={`Filter documents owned by ${ownerName}`}
+            >
+              <Identity name={ownerName} size="sm" />
+            </Link>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Identity name={ownerName} size="sm" />
+            </span>
+          )
         ) : null}
         {!isBoard ? (
           <Badge className="border-transparent bg-muted px-1.5 py-0 text-[10px] text-muted-foreground" data-testid="readonly-badge">
@@ -740,6 +950,12 @@ function DocumentHeader({
               </TooltipContent>
             ) : null}
           </Tooltip>
+          {canReview ? (
+            <Button size="sm" variant="ghost" className="h-8" onClick={onSuggestEdit} data-testid="action-suggest-edit">
+              <Pencil className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+              Suggest edit
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" className="h-8" onClick={onHistory} data-testid="action-history">
             <History className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
             History
@@ -767,8 +983,12 @@ function DocumentHeader({
             </Button>
           ) : null}
           <Button size="sm" variant="ghost" className="h-8" onClick={copyLink} data-testid="action-copy-link">
-            <Link2 className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-            Copy link
+            {copied ? (
+              <Check className="mr-1 h-3.5 w-3.5 text-green-600 dark:text-green-400" aria-hidden="true" />
+            ) : (
+              <Link2 className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {copied ? "Copied" : "Copy link"}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -804,15 +1024,14 @@ function DocumentHeader({
 
       {/* Meta row */}
       <div className="mb-3 flex items-center gap-2 border-b border-border pb-3 text-[11px] text-muted-foreground">
-        <button
-          type="button"
-          onClick={onHistory}
-          className="rounded border border-border px-1.5 py-0.5 font-mono hover:bg-accent/50"
-          data-testid="meta-rev"
-        >
-          Rev {doc.latestRevisionNumber}
-        </button>
+        <Badge asChild variant="outline" className="cursor-pointer px-1.5 py-0 font-mono hover:bg-accent/50">
+          <button type="button" onClick={onHistory} data-testid="meta-rev">
+            Rev {doc.latestRevisionNumber}
+          </button>
+        </Badge>
         <span>updated {relativeTime(doc.updatedAt)}</span>
+        {/* Autosave indicator slot (§5.2) — wired when autosave lands. */}
+        <span data-testid="autosave-slot" className="ml-auto empty:hidden" aria-live="polite" />
       </div>
     </header>
   );

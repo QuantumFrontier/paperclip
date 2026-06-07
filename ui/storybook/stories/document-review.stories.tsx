@@ -1,14 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { AlertTriangle, BookOpen, History, Link2, Lock, Pencil } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import type {
+  CompanyDocument,
   DocumentReviewIndex,
   DocumentSuggestionWithComments,
 } from "@paperclipai/shared";
 import { DocumentReviewRail } from "@/components/documents/DocumentReviewRail";
+import { DoneReviewingDialog } from "@/components/documents/DoneReviewingDialog";
 import { SuggestionCard } from "@/components/documents/SuggestionCard";
 import { SelectionToolbar } from "@/components/documents/SelectionToolbar";
-import { StatusBadge } from "@/components/StatusBadge";
-import { Badge } from "@/components/ui/badge";
+import { DocumentHeader, DOC_TYPE_ICON } from "@/pages/DocumentDetail";
 import { Button } from "@/components/ui/button";
 import { MarkdownBody } from "@/components/MarkdownBody";
 
@@ -263,34 +264,73 @@ export default meta;
 
 type Story = StoryObj;
 
+// Real CompanyDocument so the story mounts the production `DocumentHeader` (not a
+// hand-rolled copy) — this is what the visual-truth gate requires.
+const sampleDoc: CompanyDocument = {
+  id: "doc-spec",
+  companyId: "c",
+  title: "Paperclip Documents review flow",
+  format: "markdown",
+  status: "in_review",
+  documentType: "spec",
+  summary: null,
+  ownerAgentId: "agent-claude",
+  ownerUserId: null,
+  latestRevisionId: "rev-12",
+  latestRevisionNumber: 12,
+  createdByAgentId: "agent-claude",
+  createdByUserId: null,
+  updatedByAgentId: "agent-claude",
+  updatedByUserId: null,
+  lockedAt: null,
+  lockedByAgentId: null,
+  lockedByUserId: null,
+  sourceTrust: null,
+  archivedAt: null,
+  archivedByAgentId: null,
+  archivedByUserId: null,
+  createdAt: new Date(now - 48 * HOUR),
+  updatedAt: new Date(now - 2 * HOUR),
+  backlinks: [
+    { id: "l1", companyId: "c", documentId: "doc-spec", targetType: "issue", targetId: "i1", relationship: "source", issueDocumentId: "id1", issueDocumentKey: "spec", title: "Design Paperclip Documents UX", identifier: "PAP-10520", createdAt: new Date(now), updatedAt: new Date(now) },
+    { id: "l2", companyId: "c", documentId: "doc-spec", targetType: "issue", targetId: "i2", relationship: "related", issueDocumentId: null, issueDocumentKey: null, title: "Document review backend", identifier: "PAP-10522", createdAt: new Date(now), updatedAt: new Date(now) },
+  ],
+  feedbackCounts: {
+    openComments: 2,
+    resolvedComments: 1,
+    openReviewThreads: 1,
+    resolvedReviewThreads: 0,
+    pendingSuggestions: 3,
+    acceptedSuggestions: 0,
+    rejectedSuggestions: 1,
+    staleAnchors: 1,
+    orphanedAnchors: 1,
+  },
+  body: "",
+};
+
 function DetailHeader() {
   return (
-    <header className="px-4 pt-4">
-      <div className="mb-1 flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-bold text-foreground">Paperclip Documents review flow</h1>
-        <StatusBadge status="in_review" />
-        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-          <BookOpen className="h-3.5 w-3.5" /> Spec
-        </span>
-        <span className="text-xs text-muted-foreground">Owner: ClaudeCoder</span>
-      </div>
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <Button size="sm" variant="outline" className="h-8"><Pencil className="mr-1 h-3.5 w-3.5" />Edit</Button>
-        <Button size="sm" variant="ghost" className="h-8"><Pencil className="mr-1 h-3.5 w-3.5" />Suggest edit</Button>
-        <Button size="sm" variant="ghost" className="h-8"><History className="mr-1 h-3.5 w-3.5" />History</Button>
-        <Button size="sm" variant="ghost" className="h-8"><Lock className="mr-1 h-3.5 w-3.5" />Lock</Button>
-        <Button size="sm" variant="ghost" className="h-8"><Link2 className="mr-1 h-3.5 w-3.5" />Copy link</Button>
-      </div>
-      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-        <span className="text-[11px] text-muted-foreground">Backlinks:</span>
-        <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-mono">PAP-10520</Badge>
-        <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-mono">PAP-10522</Badge>
-      </div>
-      <div className="mb-3 flex items-center gap-2 border-b border-border pb-3 text-[11px] text-muted-foreground">
-        <span className="rounded border border-border px-1.5 py-0.5 font-mono">Rev 12</span>
-        <span>updated 2h ago by ClaudeCoder</span>
-      </div>
-    </header>
+    <DocumentHeader
+      doc={sampleDoc}
+      TypeIcon={DOC_TYPE_ICON[sampleDoc.documentType]}
+      ownerName="ClaudeCoder"
+      ownerAgentId="agent-claude"
+      canEdit
+      canReview
+      isBoard
+      editMode={false}
+      lockedByMe={false}
+      lockedByOther={false}
+      lockHolderName={null}
+      onEdit={noop}
+      onSuggestEdit={noop}
+      onSaveTitle={async () => {}}
+      onHistory={noop}
+      onToggleLock={noop}
+      onCopyLink={noop}
+      lockPending={false}
+    />
   );
 }
 
@@ -332,14 +372,36 @@ export const ConflictBanner: Story = {
   render: () => (
     <div
       role="alert"
-      className="m-4 flex max-w-2xl flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+      className="m-4 flex max-w-3xl flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 sm:flex-row sm:items-center sm:justify-between dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
     >
-      <AlertTriangle className="h-4 w-4 shrink-0" />
-      <span className="flex-1">Someone updated this document while you were editing.</span>
-      <Button size="sm" variant="outline" className="h-7 text-xs">View their changes</Button>
-      <Button size="sm" variant="outline" className="h-7 text-xs">Rebase my draft</Button>
-      <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive">Discard mine</Button>
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span>Someone updated this document while you were editing.</span>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button size="sm" variant="outline" className="h-8 text-xs">View their changes</Button>
+        <Button size="sm" variant="outline" className="h-8 text-xs">Rebase my draft</Button>
+        <Button size="sm" variant="ghost" className="h-8 text-xs text-destructive hover:text-destructive">Discard mine</Button>
+      </div>
     </div>
+  ),
+};
+
+/** Mobile review surface — the rail rendered inside its bottom Sheet (≤640px). */
+export const RailMobileSheet: Story = {
+  name: "Rail — mobile sheet",
+  render: () => (
+    <DocumentReviewRail
+      isMobile
+      open
+      onOpenChange={noop}
+      reviewIndex={reviewIndex}
+      canReview
+      canFinishReview
+      latestRevisionId="rev-12"
+      authorMaps={{ agentMap }}
+      {...railHandlers}
+    />
   ),
 };
 
@@ -361,6 +423,46 @@ export const SelectionToolbarStory: Story = {
       <div className="inline-flex items-center gap-1 rounded-md border border-border bg-popover px-1 py-1 shadow-md">
         <SelectionToolbar onComment={noop} onSuggest={noop} onCopyLink={noop} />
       </div>
+    </div>
+  ),
+};
+
+/** PAP-10570 — the "Done reviewing" handoff dialog opened from the rail CTA. */
+export const DoneReviewing: Story = {
+  name: "Done-reviewing handoff",
+  render: () => (
+    <div className="h-[560px] w-full">
+      <DoneReviewingDialog
+        open
+        onOpenChange={noop}
+        counts={reviewIndex.counts}
+        issueIdentifier="PAP-10520"
+        ownerName="ClaudeCoder"
+        onSubmit={noop}
+      />
+    </div>
+  ),
+};
+
+export const DoneReviewingClean: Story = {
+  name: "Done-reviewing handoff (clean)",
+  render: () => (
+    <div className="h-[560px] w-full">
+      <DoneReviewingDialog
+        open
+        onOpenChange={noop}
+        counts={{
+          ...reviewIndex.counts,
+          openAnchoredThreads: 0,
+          openReviewThreads: 0,
+          pendingSuggestions: 0,
+          staleAnchors: 0,
+          orphanedAnchors: 0,
+        }}
+        issueIdentifier="PAP-10520"
+        ownerName="ClaudeCoder"
+        onSubmit={noop}
+      />
     </div>
   ),
 };
