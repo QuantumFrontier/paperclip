@@ -14,6 +14,9 @@ import {
   Package,
   Settings,
   FolderOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pin,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -23,6 +26,7 @@ import { SidebarAgents } from "./SidebarAgents";
 import { SidebarProjects } from "./SidebarProjects";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { useSidebar } from "../context/SidebarContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
@@ -35,6 +39,7 @@ import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
   const { selectedCompanyId, selectedCompany } = useCompany();
+  const { isMobile, collapsed, peeking, toggleCollapsed, setCollapsed } = useSidebar();
   const inboxBadge = useInboxBadge(selectedCompanyId);
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
@@ -76,6 +81,36 @@ export function Sidebar() {
             <Search className="h-4 w-4" />
           </NavLink>
         </Button>
+        {/* Desktop-only collapse/expand affordance. While peeking (hover flyout
+            over the collapsed rail) it becomes a Pin that promotes the peek to a
+            pinned-expanded sidebar; otherwise it toggles the pinned rail. Mobile
+            uses the off-canvas drawer, so this control is hidden there. */}
+        {!isMobile ? (
+          peeking ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground shrink-0"
+              aria-label="Keep sidebar expanded"
+              title="Keep sidebar expanded"
+              onClick={() => setCollapsed(false)}
+            >
+              <Pin className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground shrink-0"
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={() => toggleCollapsed()}
+            >
+              {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </Button>
+          )
+        ) : null}
       </div>
 
       <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 pointer-coarse:gap-3 px-3 py-2">

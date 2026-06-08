@@ -47,11 +47,17 @@ vi.mock("../context/CompanyContext", () => ({
   }),
 }));
 
+const mockSidebar = vi.hoisted(() => ({
+  isMobile: false,
+  setSidebarOpen: vi.fn(),
+  collapsed: false,
+  peeking: false,
+  toggleCollapsed: vi.fn(),
+  setCollapsed: vi.fn(),
+}));
+
 vi.mock("../context/SidebarContext", () => ({
-  useSidebar: () => ({
-    isMobile: false,
-    setSidebarOpen: vi.fn(),
-  }),
+  useSidebar: () => mockSidebar,
 }));
 
 vi.mock("../api/heartbeats", () => ({
@@ -125,6 +131,9 @@ describe("Sidebar", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([]);
+    mockSidebar.isMobile = false;
+    mockSidebar.collapsed = false;
+    mockSidebar.peeking = false;
   });
 
   afterEach(() => {
@@ -279,6 +288,77 @@ describe("Sidebar", () => {
 
     const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "Workspaces");
     expect(link?.getAttribute("href")).toBe("/workspaces");
+
+    flushSync(() => {
+      root.unmount();
+    });
+  });
+
+  it("header toggle collapses an expanded sidebar (aria-expanded reflects state)", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    const root = await renderSidebar();
+
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Collapse sidebar"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      toggle?.click();
+    });
+    expect(mockSidebar.toggleCollapsed).toHaveBeenCalledTimes(1);
+
+    flushSync(() => {
+      root.unmount();
+    });
+  });
+
+  it("header toggle expands a collapsed rail", async () => {
+    mockSidebar.collapsed = true;
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    const root = await renderSidebar();
+
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Expand sidebar"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => {
+      toggle?.click();
+    });
+    expect(mockSidebar.toggleCollapsed).toHaveBeenCalledTimes(1);
+
+    flushSync(() => {
+      root.unmount();
+    });
+  });
+
+  it("peek header shows a pin that promotes the peek to pinned-expanded", async () => {
+    mockSidebar.collapsed = true;
+    mockSidebar.peeking = true;
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    const root = await renderSidebar();
+
+    // The collapse toggle is replaced by the pin while peeking.
+    expect(container.querySelector('button[aria-label="Expand sidebar"]')).toBeNull();
+    const pin = container.querySelector<HTMLButtonElement>('button[aria-label="Keep sidebar expanded"]');
+    expect(pin).not.toBeNull();
+
+    act(() => {
+      pin?.click();
+    });
+    expect(mockSidebar.setCollapsed).toHaveBeenCalledWith(false);
+
+    flushSync(() => {
+      root.unmount();
+    });
+  });
+
+  it("hides the collapse affordance on mobile (drawer handles it)", async () => {
+    mockSidebar.isMobile = true;
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    const root = await renderSidebar();
+
+    expect(container.querySelector('button[aria-label="Collapse sidebar"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Keep sidebar expanded"]')).toBeNull();
 
     flushSync(() => {
       root.unmount();
