@@ -4,6 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
@@ -49,6 +51,8 @@ import type {
 
 const FILE_VIEWER_LABELLED_BY_ID = "paperclip-file-viewer-title";
 const FILE_VIEWER_DESCRIBED_BY_ID = "paperclip-file-viewer-description";
+const MIN_FILE_TREE_WIDTH = 220;
+const MAX_FILE_TREE_WIDTH = 520;
 
 interface FileViewerErrorShape {
   status: number;
@@ -430,7 +434,9 @@ export function FileViewerSheet({
   const [copyingField, setCopyingField] = useState<"content" | "link" | null>(null);
   const [copyFeedback, setCopyFeedback] = useState("");
   const [announcement, setAnnouncement] = useState<string>("");
+  const [fileTreeWidth, setFileTreeWidth] = useState(288);
   const copyFeedbackTimerRef = useRef<number | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!state) {
@@ -485,6 +491,7 @@ export function FileViewerSheet({
 
   useEffect(() => () => {
     if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
+    resizeCleanupRef.current?.();
   }, []);
 
   const handleOpenChange = useCallback(
@@ -572,6 +579,37 @@ export function FileViewerSheet({
     void resolveQuery.refetch();
     if (canPreview) void contentQuery.refetch();
   }, [canPreview, contentQuery, resolveQuery]);
+
+  const handleResizeStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeCleanupRef.current?.();
+    const startX = event.clientX;
+    const startWidth = fileTreeWidth;
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.min(
+        MAX_FILE_TREE_WIDTH,
+        Math.max(MIN_FILE_TREE_WIDTH, startWidth + moveEvent.clientX - startX),
+      );
+      setFileTreeWidth(nextWidth);
+    };
+    const cleanup = () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", cleanup);
+      resizeCleanupRef.current = null;
+    };
+    resizeCleanupRef.current = cleanup;
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", cleanup, { once: true });
+  }, [fileTreeWidth]);
+
+  const handleResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setFileTreeWidth((current) => {
+      const delta = event.key === "ArrowLeft" ? -24 : 24;
+      return Math.min(MAX_FILE_TREE_WIDTH, Math.max(MIN_FILE_TREE_WIDTH, current + delta));
+    });
+  }, []);
 
   const title = state ? basename(state.path) : "Browse workspace";
   const description = state
@@ -692,19 +730,39 @@ export function FileViewerSheet({
           </div>
           {state ? (
             <div className="flex min-h-0 flex-1 gap-3 bg-muted/30 p-3">
-              <aside className="hidden min-h-0 w-72 shrink-0 overflow-hidden rounded-md border border-border bg-background sm:flex">
+              <aside
+                className="hidden min-h-0 shrink-0 overflow-hidden rounded-md border border-border bg-background sm:flex"
+                style={{ width: fileTreeWidth }}
+              >
                 <WorkspaceFileBrowser
                   key={`${state.projectId ?? ""}:${state.workspaceId ?? ""}`}
                   issueId={issueId}
                   companyId={companyId}
                   onOpen={handleBrowseOpen}
-                  initialProjectId={state.projectId}
-                  initialWorkspaceId={state.workspaceId}
+                  initialQuery={cameFromBrowse ? viewer.query : null}
+                  initialFolderPath={cameFromBrowse ? viewer.folderPath : null}
+                  initialProjectId={state.projectId ?? (cameFromBrowse ? viewer.browseProjectId : null)}
+                  initialWorkspaceId={state.workspaceId ?? (cameFromBrowse ? viewer.browseWorkspaceId : null)}
                   autoFocusSearch={false}
                   compact
+                  selectedPath={state.path}
+                  selectedProjectId={state.projectId}
+                  selectedWorkspaceId={state.workspaceId}
                   className="min-h-0 flex-1 p-2"
                 />
               </aside>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize file tree"
+                aria-valuemin={MIN_FILE_TREE_WIDTH}
+                aria-valuemax={MAX_FILE_TREE_WIDTH}
+                aria-valuenow={fileTreeWidth}
+                tabIndex={0}
+                onPointerDown={handleResizeStart}
+                onKeyDown={handleResizeKeyDown}
+                className="hidden w-1 shrink-0 cursor-col-resize rounded-full bg-border transition-colors hover:bg-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:block"
+              />
               <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-background">
                 <FileViewerBody
                   resolveQuery={resolveQuery}

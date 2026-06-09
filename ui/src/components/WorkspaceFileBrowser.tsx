@@ -10,9 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, Cloud, FileCode2, FolderOpen, Loader2, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { timeAgo } from "@/lib/timeAgo";
 import { fileResourcesApi } from "@/api/file-resources";
 import { projectsApi } from "@/api/projects";
 import { ApiError } from "@/api/client";
@@ -25,12 +23,6 @@ import type {
   WorkspaceFileSelector,
 } from "@paperclipai/shared";
 
-const WORKSPACE_OPTIONS: ReadonlyArray<{ value: WorkspaceFileSelector; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "execution", label: "Execution" },
-  { value: "project", label: "Project" },
-];
-
 type BrowserSource = "current" | "other";
 
 // Hard list cap. The spec called out ~50 to keep reads cheap; 100 trades a bit
@@ -41,16 +33,6 @@ const LIST_LIMIT = 100;
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx < 0 ? path : path.slice(idx + 1);
-}
-
-function trimTrailingSlash(path: string): string {
-  return path.replace(/\/+$/, "");
-}
-
-function folderName(path: string): string {
-  const trimmed = trimTrailingSlash(path);
-  if (!trimmed) return "";
-  return basename(trimmed);
 }
 
 function normalizeFolderPrefix(path: string | null | undefined): string {
@@ -107,60 +89,51 @@ function StateMessage({ icon, title, body }: { icon: ReactNode; title: string; b
   );
 }
 
-function WorkspaceSelector({
-  value,
-  onChange,
+function WorkspaceFileBreadcrumbs({
+  rootLabel,
+  folderPath,
+  onOpenFolder,
 }: {
-  value: WorkspaceFileSelector;
-  onChange: (next: WorkspaceFileSelector) => void;
+  rootLabel: string | null;
+  folderPath: string | null;
+  onOpenFolder: (path: string | null) => void;
 }) {
-  return (
-    <div role="group" aria-label="Workspace" className="inline-flex shrink-0 rounded-md border border-border p-0.5">
-      {WORKSPACE_OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded px-2 py-1 text-xs transition-colors",
-            value === option.value ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+  const segments = folderPath?.split("/").filter(Boolean) ?? [];
+  if (!rootLabel && segments.length === 0) return null;
 
-function SourceSelector({
-  value,
-  onChange,
-}: {
-  value: BrowserSource;
-  onChange: (next: BrowserSource) => void;
-}) {
   return (
-    <div role="group" aria-label="File source" className="inline-flex shrink-0 rounded-md border border-border p-0.5">
-      {[
-        { value: "current" as const, label: "Current workspace" },
-        { value: "other" as const, label: "Other project" },
-      ].map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded px-2 py-1 text-xs transition-colors",
-            value === option.value ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <nav aria-label="Current folder" className="min-w-0 overflow-hidden text-[11px] text-muted-foreground">
+      <ol className="flex min-w-0 items-center gap-1 overflow-hidden">
+        {rootLabel ? (
+          <li className="min-w-0 shrink">
+            <button
+              type="button"
+              onClick={() => onOpenFolder(null)}
+              className="max-w-full truncate rounded px-1 py-0.5 text-left hover:bg-accent hover:text-foreground"
+              title={rootLabel}
+            >
+              {rootLabel}
+            </button>
+          </li>
+        ) : null}
+        {segments.map((segment, index) => {
+          const path = segments.slice(0, index + 1).join("/");
+          return (
+            <li key={path} className="flex min-w-0 shrink items-center gap-1">
+              <span aria-hidden="true" className="shrink-0 opacity-50">/</span>
+              <button
+                type="button"
+                onClick={() => onOpenFolder(path)}
+                className="max-w-full truncate rounded px-1 py-0.5 text-left font-mono hover:bg-accent hover:text-foreground"
+                title={path}
+              >
+                {segment}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -168,15 +141,13 @@ interface WorkspaceFileRowProps {
   item: WorkspaceFileListItem;
   treeItemId: string;
   selected: boolean;
-  showTimestamp: boolean;
   depth: number;
   onOpen: () => void;
   onHover: () => void;
 }
 
-function WorkspaceFileRow({ item, treeItemId, selected, showTimestamp, depth, onOpen, onHover }: WorkspaceFileRowProps) {
+function WorkspaceFileRow({ item, treeItemId, selected, depth, onOpen, onHover }: WorkspaceFileRowProps) {
   const name = basename(item.relativePath);
-  const stamp = showTimestamp && item.modifiedAt ? timeAgo(item.modifiedAt) : null;
   return (
     <div
       id={treeItemId}
@@ -193,9 +164,6 @@ function WorkspaceFileRow({ item, treeItemId, selected, showTimestamp, depth, on
     >
       <FileCode2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{name}</span>
-      {stamp ? (
-        <span className="hidden shrink-0 text-[11px] tabular-nums text-muted-foreground sm:inline">{stamp}</span>
-      ) : null}
     </div>
   );
 }
@@ -303,8 +271,8 @@ interface WorkspaceFileTreeProps {
   nodes: WorkspaceFileTreeNode[];
   listboxId: string;
   highlightedItemKey: string | null;
+  selectedItemKey: string | null;
   collapsedFolders: Set<string>;
-  showTimestamp: boolean;
   onToggleFolder: (key: string) => void;
   onOpen: (item: WorkspaceFileListItem) => void;
   onHoverFile: (item: WorkspaceFileListItem) => void;
@@ -314,8 +282,8 @@ function WorkspaceFileTree({
   nodes,
   listboxId,
   highlightedItemKey,
+  selectedItemKey,
   collapsedFolders,
-  showTimestamp,
   onToggleFolder,
   onOpen,
   onHoverFile,
@@ -352,8 +320,7 @@ function WorkspaceFileTree({
         key={node.key}
         item={node.item}
         treeItemId={`${listboxId}-file-${node.key}`}
-        selected={node.key === highlightedItemKey}
-        showTimestamp={showTimestamp}
+        selected={node.key === selectedItemKey || node.key === highlightedItemKey}
         depth={node.depth}
         onOpen={() => onOpen(node.item)}
         onHover={() => onHoverFile(node.item)}
@@ -386,6 +353,9 @@ export interface WorkspaceFileBrowserProps {
   initialWorkspaceId?: string | null;
   autoFocusSearch?: boolean;
   compact?: boolean;
+  selectedPath?: string | null;
+  selectedProjectId?: string | null;
+  selectedWorkspaceId?: string | null;
   className?: string;
 }
 
@@ -398,13 +368,14 @@ export function WorkspaceFileBrowser({
   initialProjectId,
   initialWorkspaceId,
   autoFocusSearch = true,
-  compact = false,
+  selectedPath,
+  selectedProjectId: activeProjectId,
+  selectedWorkspaceId: activeWorkspaceId,
   className,
 }: WorkspaceFileBrowserProps) {
-  const [source, setSource] = useState<BrowserSource>(
-    initialProjectId && initialWorkspaceId ? "other" : "current",
-  );
-  const [workspace, setWorkspace] = useState<WorkspaceFileSelector>("auto");
+  const source: BrowserSource =
+    initialProjectId && initialWorkspaceId ? "other" : "current";
+  const workspace: WorkspaceFileSelector = "auto";
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId ?? null);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(initialWorkspaceId ?? null);
   const [folderPath, setFolderPath] = useState<string | null>(initialFolderPath ?? null);
@@ -461,6 +432,11 @@ export function WorkspaceFileBrowser({
       ?? null;
     setSelectedWorkspaceId(nextWorkspace?.id ?? null);
   }, [projectsQuery.data, projectsWithWorkspaces, selectedProject, selectedProjectId, selectedWorkspaceId, source]);
+
+  useEffect(() => {
+    setSelectedProjectId(initialProjectId ?? null);
+    setSelectedWorkspaceId(initialWorkspaceId ?? null);
+  }, [initialProjectId, initialWorkspaceId]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => setDebouncedQuery(searchInput.trim()), 150);
@@ -569,15 +545,23 @@ export function WorkspaceFileBrowser({
     }
   }
 
-  function handleProjectChange(projectId: string) {
-    const project = projectsWithWorkspaces.find((item) => item.id === projectId) ?? null;
-    setSelectedProjectId(project?.id ?? null);
-    setSelectedWorkspaceId(project?.primaryWorkspace?.id ?? project?.workspaces[0]?.id ?? null);
-  }
-
   const highlightedItem = highlightedIndex >= 0 ? items[highlightedIndex] : undefined;
   const highlightedItemKey = highlightedItem ? itemKey(highlightedItem) : null;
+  const selectedItem = selectedPath
+    ? items.find((item) =>
+      item.relativePath === selectedPath &&
+      (activeProjectId ? item.projectId === activeProjectId : true) &&
+      (activeWorkspaceId ? item.workspaceId === activeWorkspaceId : true)
+    )
+    : null;
+  const selectedItemKey = selectedItem ? itemKey(selectedItem) : null;
   const activeOptionId = highlightedItemKey ? `${listboxId}-file-${highlightedItemKey}` : undefined;
+
+  function openFolder(path: string | null) {
+    setFolderPath(path);
+    setSearchInput("");
+    setDebouncedQuery("");
+  }
 
   function openItem(item: WorkspaceFileListItem) {
     const itemTarget = item.projectId
@@ -671,8 +655,8 @@ export function WorkspaceFileBrowser({
         nodes={treeNodes}
         listboxId={listboxId}
         highlightedItemKey={highlightedItemKey}
+        selectedItemKey={selectedItemKey}
         collapsedFolders={collapsedFolders}
-        showTimestamp={false}
         onToggleFolder={toggleFolder}
         onOpen={openItem}
         onHoverFile={handleHoverFile}
@@ -681,8 +665,8 @@ export function WorkspaceFileBrowser({
   }
 
   return (
-    <div className={cn("flex min-h-0 flex-col gap-2", className)}>
-      <div className="relative">
+    <div className={cn("flex min-h-0 min-w-0 flex-col gap-2", className)}>
+      <div className="relative min-w-0 max-w-full overflow-hidden">
         <Search
           aria-hidden="true"
           className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
@@ -702,99 +686,15 @@ export function WorkspaceFileBrowser({
           autoFocus={autoFocusSearch}
           autoComplete="off"
           spellCheck={false}
-          className="h-8 pl-8 font-mono text-xs"
+          className="h-8 w-full max-w-full min-w-0 pl-8 font-mono text-xs"
         />
       </div>
 
-      {!compact ? (
-        <>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">Source</span>
-            <SourceSelector value={source} onChange={setSource} />
-            {source === "current" ? (
-              <>
-                <span className="text-xs text-muted-foreground">Workspace</span>
-                <WorkspaceSelector value={workspace} onChange={setWorkspace} />
-              </>
-            ) : null}
-          </div>
-
-          {source === "other" ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">Project</span>
-              <Select
-                value={selectedProjectId ?? undefined}
-                onValueChange={handleProjectChange}
-                disabled={!companyId || projectsQuery.isFetching || projectsWithWorkspaces.length === 0}
-              >
-                <SelectTrigger size="sm" className="h-8 max-w-[260px] text-xs">
-                  <SelectValue placeholder={projectsQuery.isFetching ? "Loading projects" : "Choose project"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {projectsWithWorkspaces.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      {project.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <span className="text-xs text-muted-foreground">Workspace</span>
-              <Select
-                value={selectedWorkspaceId ?? undefined}
-                onValueChange={setSelectedWorkspaceId}
-                disabled={!selectedProject || selectedProject.workspaces.length === 0}
-              >
-                <SelectTrigger size="sm" className="h-8 max-w-[260px] text-xs">
-                  <SelectValue placeholder="Choose workspace" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(selectedProject?.workspaces ?? []).map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
-
-          {source === "other" && selectedProject && selectedWorkspace ? (
-            <div
-              className="truncate text-[11px] text-muted-foreground"
-              title={`${selectedProject.name} / ${selectedWorkspace.name}`}
-            >
-              Browsing {selectedProject.name} / {selectedWorkspace.name}
-            </div>
-          ) : null}
-
-          {folderPath ? (
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title={folderPath}>
-              <FolderOpen aria-hidden="true" className="h-3 w-3 shrink-0" />
-              <span className="shrink-0">Folder</span>
-              <span className="min-w-0 truncate font-mono text-foreground">{folderName(folderPath)}</span>
-            </div>
-          ) : null}
-
-          <div className="flex items-baseline justify-between gap-2 pt-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              {folderPath ? (
-                isSearch ? <>Files in folder matching “{q}”</> : "Files in folder"
-              ) : isSearch ? <>Files matching “{q}”</> : "Recently changed"}
-            </span>
-            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              {listQuery.isFetching ? <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" /> : null}
-              {data?.state === "available" && items.length > 0 ? <span>· {items.length}</span> : null}
-            </span>
-          </div>
-
-          {workspaceLabel ? (
-            <div className="truncate text-[11px] text-muted-foreground" title={workspaceLabel}>
-              From {workspaceLabel}
-            </div>
-          ) : null}
-        </>
-      ) : null}
+      <WorkspaceFileBreadcrumbs
+        rootLabel={selectedProject && selectedWorkspace ? `${selectedProject.name} / ${selectedWorkspace.name}` : workspaceLabel}
+        folderPath={folderPath}
+        onOpenFolder={openFolder}
+      />
 
       <div aria-live="polite" className="sr-only">
         {announcement}

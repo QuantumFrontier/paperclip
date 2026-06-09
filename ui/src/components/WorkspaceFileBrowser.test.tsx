@@ -184,8 +184,9 @@ describe("WorkspaceFileBrowser", () => {
     const { onOpen } = renderBrowser();
 
     expect(container.querySelector('[role="tree"]')).not.toBeNull();
-    expect(container.textContent).toContain("Recently changed");
-    expect(container.textContent).toContain("From Isolated workspace");
+    expect(container.textContent).toContain("Isolated workspace");
+    expect(container.textContent).not.toContain("Recently changed");
+    expect(container.textContent).not.toContain("From Isolated workspace");
 
     const option = Array.from(container.querySelectorAll('[role="treeitem"]')).find(
       (el) => el.getAttribute("title") === "ui/src/pages/IssueDetail.tsx",
@@ -238,9 +239,10 @@ describe("WorkspaceFileBrowser", () => {
     useQueryMock.mockReturnValue(ok(availableResponse([createItem()])));
     renderBrowser(vi.fn(), { autoFocusSearch: false });
     expect(container.querySelector("input")?.hasAttribute("autofocus")).toBe(false);
+    expect(container.querySelector("input")?.className).toContain("max-w-full");
   });
 
-  it("hides source controls, folder headings, workspace labels, and timestamps in compact preview mode", () => {
+  it("hides source controls, folder headings, workspace labels, and timestamps", () => {
     useQueryMock.mockReturnValue(ok(availableResponse([
       createItem({
         relativePath: "videos/90-days-paperclip/tweet.md",
@@ -258,6 +260,15 @@ describe("WorkspaceFileBrowser", () => {
     expect(container.querySelector(".tabular-nums")).toBeNull();
     expect(container.textContent).toContain("videos");
     expect(container.textContent).toContain("tweet.md");
+  });
+
+  it("marks the selected file in the tree", () => {
+    useQueryMock.mockReturnValue(ok(availableResponse([createItem()])));
+    renderBrowser(vi.fn(), { selectedPath: "ui/src/pages/IssueDetail.tsx" });
+    const selected = Array.from(container.querySelectorAll('[role="treeitem"]')).find(
+      (el) => el.getAttribute("title") === "ui/src/pages/IssueDetail.tsx",
+    );
+    expect(selected?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("does not render a Recent/All toggle", () => {
@@ -320,8 +331,8 @@ describe("WorkspaceFileBrowser", () => {
       initialWorkspaceId: "workspace-content",
     });
 
-    expect(container.textContent).toContain("Other project");
-    expect(container.textContent).toContain("Browsing Paperclip Content / Paperclip Content");
+    expect(container.textContent).not.toContain("Other project");
+    expect(container.textContent).toContain("Paperclip Content / Paperclip Content");
     const listCall = useQueryMock.mock.calls.find(([options]) => options.queryKey?.[3] === "list");
     expect(listCall?.[0].queryKey[4]).toMatchObject({
       workspace: "project",
@@ -368,7 +379,7 @@ describe("WorkspaceFileBrowser", () => {
 
     expect(container.textContent).toContain("bundled-skills");
     expect(container.textContent).not.toContain(folderPath);
-    expect(container.textContent).toContain("Files in folder");
+    expect(container.textContent).not.toContain("Files in folder");
     const listCall = useQueryMock.mock.calls.find(([options]) => options.queryKey?.[3] === "list");
     expect(listCall?.[0].queryKey[4]).toMatchObject({
       workspace: "project",
@@ -389,6 +400,25 @@ describe("WorkspaceFileBrowser", () => {
       projectId: "project-content",
       workspaceId: "workspace-content",
     });
+  });
+
+  it("lets breadcrumb folders navigate to parent directories", () => {
+    const folderPath = "content-os/cases/active/";
+    useQueryMock.mockReturnValue(ok(availableResponse([createItem({
+      relativePath: `${folderPath}README.md`,
+      displayPath: `${folderPath}README.md`,
+    })])));
+
+    renderBrowser(vi.fn(), { initialFolderPath: folderPath });
+    const contentOsCrumb = Array.from(container.querySelectorAll("button")).find(
+      (el) => el.getAttribute("title") === "content-os",
+    );
+    expect(contentOsCrumb).not.toBeUndefined();
+    act(() => {
+      contentOsCrumb!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    const latestListCall = useQueryMock.mock.calls.filter(([options]) => options.queryKey?.[3] === "list").at(-1);
+    expect(latestListCall?.[0].queryKey[4]).toMatchObject({ path: "content-os" });
   });
 });
 

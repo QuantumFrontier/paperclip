@@ -143,4 +143,11 @@ describe("FileViewerSheet copy actions", () => {
     expect(writeText).toHaveBeenCalledWith(window.location.href);
     expect(document.body.textContent).toContain("Copied link");
   });
+
+  it("renders a keyboard-addressable file tree resize separator", () => {
+    renderSheet();
+    const separator = document.body.querySelector('[role="separator"][aria-label="Resize file tree"]');
+    expect(separator).not.toBeNull();
+    expect(separator?.getAttribute("aria-valuenow")).toBe("288");
+  });
 });
