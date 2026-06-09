@@ -23,6 +23,7 @@ export type WorkspaceFileResourceService = {
     mode?: "all" | "recent" | "changed" | null;
     q?: string | null;
     limit?: number | null;
+    offset?: number | null;
   }, opts?: { issue?: Awaited<ReturnType<WorkspaceFileResourceService["getIssue"]>> }): Promise<WorkspaceFileListResponse>;
   resolve(
     issueId: string,
@@ -150,6 +151,7 @@ function readListQuery(query: unknown) {
     mode: parsed.mode ?? "all",
     q: parsed.q?.trim() || null,
     limit: parsed.limit,
+    offset: parsed.offset,
   };
 }
 

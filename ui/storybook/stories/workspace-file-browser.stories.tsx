@@ -4,7 +4,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
   ResolvedWorkspaceResource,
   WorkspaceFileContent,
-  WorkspaceFileListItem,
+  WorkspaceFileListFileItem,
   WorkspaceFileListResponse,
 } from "@paperclipai/shared";
 import { FileViewerProvider, useRequiredFileViewer } from "@/context/FileViewerContext";
@@ -22,10 +22,10 @@ import { queryKeys } from "@/lib/queryKeys";
 const ISSUE_ID = "issue-browse-demo";
 
 function listKey(issueId: string) {
-  return queryKeys.issues.fileResources(issueId, { workspace: "auto", mode: "changed", q: null, limit: 100 });
+  return queryKeys.issues.fileResources(issueId, { workspace: "auto", mode: "changed", q: null, limit: 100, offset: 0 });
 }
 
-function item(relativePath: string, minutesAgo: number, overrides: Partial<WorkspaceFileListItem> = {}): WorkspaceFileListItem {
+function item(relativePath: string, minutesAgo: number, overrides: Partial<WorkspaceFileListFileItem> = {}): WorkspaceFileListFileItem {
   return {
     kind: "file",
     provider: "git_worktree",
@@ -53,7 +53,7 @@ const recentList: WorkspaceFileListResponse = {
     workspaceKind: "execution_workspace",
     workspaceId: "ws-1",
   },
-  query: { workspace: "auto", mode: "changed", q: null, limit: 100 },
+  query: { workspace: "auto", mode: "changed", q: null, limit: 100, offset: 0 },
   items: [
     item("ui/src/components/WorkspaceFileBrowser.tsx", 2),
     item("ui/src/components/FileViewerSheet.tsx", 2),
@@ -72,7 +72,7 @@ function unavailable(reason: string): WorkspaceFileListResponse {
     state: "unavailable",
     unavailableReason: reason,
     workspace: null,
-    query: { workspace: "auto", mode: "changed", q: null, limit: 100 },
+    query: { workspace: "auto", mode: "changed", q: null, limit: 100, offset: 0 },
     items: [],
     scannedCount: 0,
     truncated: false,

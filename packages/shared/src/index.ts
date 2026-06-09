@@ -451,6 +451,8 @@ export type {
   WorkspaceOperationStatus,
   WorkspaceFileContent,
   WorkspaceFileContentEncoding,
+  WorkspaceFileListDirectoryItem,
+  WorkspaceFileListFileItem,
   WorkspaceFileListItem,
   WorkspaceFileListMode,
   WorkspaceFileListResponse,

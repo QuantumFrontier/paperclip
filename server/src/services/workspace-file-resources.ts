@@ -139,6 +139,7 @@ type WorkspaceFileListQueryInput = {
   mode?: WorkspaceFileListMode | null;
   q?: string | null;
   limit?: number | null;
+  offset?: number | null;
 };
 
 type WorkspaceTargetInput = {
@@ -264,6 +265,34 @@ function listItemFromStat(input: {
       preview: true,
       download: false,
       listChildren: false,
+    },
+  };
+}
+
+function listItemFromDirectory(input: {
+  candidate: WorkspaceCandidate;
+  relativePath: string;
+  stat?: { mtime: Date };
+}): WorkspaceFileListItem {
+  return {
+    kind: "directory",
+    provider: input.candidate.provider,
+    title: path.posix.basename(input.relativePath),
+    relativePath: input.relativePath,
+    displayPath: input.candidate.projectName ? `${input.candidate.projectName} / ${input.relativePath}/` : `${input.relativePath}/`,
+    workspaceLabel: input.candidate.label,
+    workspaceKind: input.candidate.workspaceKind,
+    workspaceId: input.candidate.workspaceId,
+    projectId: input.candidate.projectId ?? null,
+    projectName: input.candidate.projectName ?? null,
+    contentType: null,
+    byteSize: null,
+    modifiedAt: input.stat?.mtime.toISOString() ?? null,
+    previewKind: "unsupported",
+    capabilities: {
+      preview: false,
+      download: false,
+      listChildren: true,
     },
   };
 }
@@ -510,6 +539,7 @@ function unavailableFileList(input: {
   path?: string | null;
   q: string | null;
   limit: number;
+  offset: number;
   candidate?: WorkspaceCandidate | null;
   reason: string;
 }): WorkspaceFileListResponse {
@@ -533,6 +563,7 @@ function unavailableFileList(input: {
       path: input.path ?? null,
       q: input.q,
       limit: input.limit,
+      offset: input.offset,
     },
     items: [],
     scannedCount: 0,
@@ -546,6 +577,7 @@ function availableFileList(input: {
   path?: string | null;
   q: string | null;
   limit: number;
+  offset: number;
   candidate: WorkspaceCandidate;
   items: WorkspaceFileListItem[];
   scannedCount: number;
@@ -568,6 +600,7 @@ function availableFileList(input: {
       path: input.path ?? null,
       q: input.q,
       limit: input.limit,
+      offset: input.offset,
     },
     items: input.items,
     scannedCount: input.scannedCount,
@@ -608,6 +641,106 @@ async function listLocalFileCandidate(input: {
     return null;
   }
   return listItemFromStat({ candidate: input.candidate, relativePath: normalized.relativePath, stat });
+}
+
+async function listLocalDirectoryChildCandidate(input: {
+  candidate: WorkspaceCandidate;
+  rootReal: string;
+  parentReal: string;
+  relativePath: string;
+  entry: import("node:fs").Dirent;
+  normalizedQuery: string | null;
+}): Promise<WorkspaceFileListItem | null> {
+  let normalized: NormalizedPath;
+  try {
+    normalized = normalizeWorkspaceRelativePath(input.relativePath);
+  } catch {
+    return null;
+  }
+  if (shouldPruneSegments(normalized.segments)) return null;
+  if (!matchesSearch(normalized.relativePath, input.normalizedQuery)) return null;
+  if (input.entry.isSymbolicLink()) return null;
+
+  if (input.entry.isDirectory()) {
+    const targetLexical = path.join(input.parentReal, input.entry.name);
+    try {
+      const stat = await fs.lstat(targetLexical);
+      const targetReal = await fs.realpath(targetLexical);
+      if (!isInsideRoot(input.rootReal, targetReal)) return null;
+      const realRelative = relativePathFromReal(input.rootReal, targetReal);
+      if (shouldPruneSegments(realRelative.split("/").filter(Boolean))) return null;
+      return listItemFromDirectory({ candidate: input.candidate, relativePath: normalized.relativePath, stat });
+    } catch {
+      return null;
+    }
+  }
+
+  if (!input.entry.isFile()) return null;
+  return listLocalFileCandidate({
+    candidate: input.candidate,
+    rootReal: input.rootReal,
+    relativePath: input.relativePath,
+    normalizedQuery: input.normalizedQuery,
+  });
+}
+
+async function enumerateWorkspaceDirectoryChildren(input: {
+  candidate: WorkspaceCandidate;
+  rootReal: string;
+  startReal?: string;
+  startRelativePath?: string;
+  normalizedQuery: string | null;
+  limit: number;
+  offset: number;
+}) {
+  let entries;
+  try {
+    entries = await fs.readdir(input.startReal ?? input.rootReal, { withFileTypes: true });
+  } catch {
+    return { items: [], scannedCount: 0, truncated: false };
+  }
+
+  entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const items: WorkspaceFileListItem[] = [];
+  let scannedCount = 0;
+  let matchedCount = 0;
+  let truncated = false;
+  for (const entry of entries) {
+    scannedCount += 1;
+    if (scannedCount > WORKSPACE_FILE_LIST_MAX_SCANNED_ENTRIES) {
+      truncated = true;
+      break;
+    }
+    if (entry.name.includes("\0") || entry.name.includes("/") || entry.name.includes("\\")) continue;
+
+    const relativePath = input.startRelativePath ? `${input.startRelativePath}/${entry.name}` : entry.name;
+    const item = await listLocalDirectoryChildCandidate({
+      candidate: input.candidate,
+      rootReal: input.rootReal,
+      parentReal: input.startReal ?? input.rootReal,
+      relativePath,
+      entry,
+      normalizedQuery: input.normalizedQuery,
+    });
+    if (!item) continue;
+
+    if (matchedCount < input.offset) {
+      matchedCount += 1;
+      continue;
+    }
+    if (items.length >= input.limit) {
+      truncated = true;
+      break;
+    }
+    matchedCount += 1;
+    items.push(item);
+  }
+
+  return { items, scannedCount, truncated };
 }
 
 async function enumerateWorkspaceFiles(input: {
@@ -969,11 +1102,12 @@ export function workspaceFileResourceService(db: Db) {
       WORKSPACE_FILE_LIST_MAX_LIMIT,
       Math.max(1, Math.floor(input.limit ?? WORKSPACE_FILE_LIST_DEFAULT_LIMIT)),
     );
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
     const q = input.q?.trim() || null;
     const normalizedQuery = q?.toLowerCase() ?? null;
     const candidates = await listCandidates(issue, selector, input);
     if (candidates.length === 0) {
-      return unavailableFileList({ selector, mode, path: normalizedPath?.relativePath ?? null, q, limit, reason: "no_workspace" });
+      return unavailableFileList({ selector, mode, path: normalizedPath?.relativePath ?? null, q, limit, offset, reason: "no_workspace" });
     }
 
     let firstUnavailable: { candidate: WorkspaceCandidate; reason: string } | null = null;
@@ -982,7 +1116,16 @@ export function workspaceFileResourceService(db: Db) {
       if (candidate.remote) {
         firstUnavailable ??= { candidate, reason: "remote_workspace" };
         if (explicitTarget || selector !== "auto") {
-          return unavailableFileList({ selector, mode, path: normalizedPath?.relativePath ?? null, q, limit, candidate, reason: "remote_workspace" });
+          return unavailableFileList({
+            selector,
+            mode,
+            path: normalizedPath?.relativePath ?? null,
+            q,
+            limit,
+            offset,
+            candidate,
+            reason: "remote_workspace",
+          });
         }
         continue;
       }
@@ -1008,7 +1151,16 @@ export function workspaceFileResourceService(db: Db) {
         }
         firstUnavailable ??= { candidate, reason: "workspace_unavailable" };
         if (explicitTarget || selector !== "auto") {
-          return unavailableFileList({ selector, mode, path: null, q, limit, candidate, reason: "workspace_unavailable" });
+          return unavailableFileList({
+            selector,
+            mode,
+            path: null,
+            q,
+            limit,
+            offset,
+            candidate,
+            reason: "workspace_unavailable",
+          });
         }
         continue;
       }
@@ -1019,7 +1171,16 @@ export function workspaceFileResourceService(db: Db) {
           const reason = changed.unavailableReason ?? "changed_unavailable";
           firstUnavailable ??= { candidate, reason };
           if (explicitTarget || selector !== "auto") {
-            return unavailableFileList({ selector, mode, path: normalizedPath?.relativePath ?? null, q, limit, candidate, reason });
+            return unavailableFileList({
+              selector,
+              mode,
+              path: normalizedPath?.relativePath ?? null,
+              q,
+              limit,
+              offset,
+              candidate,
+              reason,
+            });
           }
           continue;
         }
@@ -1029,6 +1190,7 @@ export function workspaceFileResourceService(db: Db) {
           path: normalizedPath?.relativePath ?? null,
           q,
           limit,
+          offset,
           candidate,
           items: changed.items,
           scannedCount: changed.scannedCount,
@@ -1036,7 +1198,17 @@ export function workspaceFileResourceService(db: Db) {
         });
       }
 
-      const listed = await enumerateWorkspaceFiles({
+      const listed = mode === "all" && !normalizedQuery
+        ? await enumerateWorkspaceDirectoryChildren({
+          candidate,
+          rootReal,
+          startReal,
+          startRelativePath,
+          normalizedQuery,
+          limit,
+          offset,
+        })
+        : await enumerateWorkspaceFiles({
         candidate,
         rootReal,
         startReal,
@@ -1051,6 +1223,7 @@ export function workspaceFileResourceService(db: Db) {
         path: normalizedPath?.relativePath ?? null,
         q,
         limit,
+        offset,
         candidate,
         items: listed.items,
         scannedCount: listed.scannedCount,
@@ -1074,7 +1247,17 @@ export function workspaceFileResourceService(db: Db) {
       );
       if (discovered.state === "ambiguous") throwAmbiguousWorkspacePath(discovered.count);
       if (discovered.state === "one") {
-        const listed = await enumerateWorkspaceFiles({
+        const listed = mode === "all" && !normalizedQuery
+          ? await enumerateWorkspaceDirectoryChildren({
+            candidate: discovered.value.candidate,
+            rootReal: discovered.value.rootReal,
+            startReal: discovered.value.startReal,
+            startRelativePath: discovered.value.startRelativePath,
+            normalizedQuery,
+            limit,
+            offset,
+          })
+          : await enumerateWorkspaceFiles({
           candidate: discovered.value.candidate,
           rootReal: discovered.value.rootReal,
           startReal: discovered.value.startReal,
@@ -1089,6 +1272,7 @@ export function workspaceFileResourceService(db: Db) {
           path: normalizedPath.relativePath,
           q,
           limit,
+          offset,
           candidate: discovered.value.candidate,
           items: listed.items,
           scannedCount: listed.scannedCount,
@@ -1103,6 +1287,7 @@ export function workspaceFileResourceService(db: Db) {
       path: normalizedPath?.relativePath ?? null,
       q,
       limit,
+      offset,
       candidate: firstUnavailable?.candidate ?? null,
       reason: firstUnavailable?.reason ?? "no_local_workspace",
     });

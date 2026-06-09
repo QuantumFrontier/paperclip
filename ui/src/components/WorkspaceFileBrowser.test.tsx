@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import type { Project, ProjectWorkspace, WorkspaceFileListItem, WorkspaceFileListResponse } from "@paperclipai/shared";
+import type { Project, ProjectWorkspace, WorkspaceFileListDirectoryItem, WorkspaceFileListFileItem, WorkspaceFileListItem, WorkspaceFileListResponse } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceFileBrowser, describeUnavailable } from "./WorkspaceFileBrowser";
 
@@ -23,13 +23,14 @@ vi.mock("@tanstack/react-query", async () => {
   return {
     ...actual,
     useQuery: (options: unknown) => useQueryMock(options),
+    useQueries: ({ queries }: { queries: unknown[] }) => queries.map((options) => useQueryMock(options)),
   };
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-function createItem(overrides: Partial<WorkspaceFileListItem> = {}): WorkspaceFileListItem {
+function createItem(overrides: Partial<WorkspaceFileListFileItem> = {}): WorkspaceFileListFileItem {
   return {
     kind: "file",
     provider: "git_worktree",
@@ -48,6 +49,25 @@ function createItem(overrides: Partial<WorkspaceFileListItem> = {}): WorkspaceFi
   };
 }
 
+function createDirectoryItem(overrides: Partial<WorkspaceFileListDirectoryItem> = {}): WorkspaceFileListDirectoryItem {
+  return {
+    kind: "directory",
+    provider: "git_worktree",
+    title: "src",
+    relativePath: "ui/src",
+    displayPath: "ui/src/",
+    workspaceLabel: "Isolated workspace",
+    workspaceKind: "execution_workspace",
+    workspaceId: "ws-1",
+    contentType: null,
+    byteSize: null,
+    modifiedAt: null,
+    previewKind: "unsupported",
+    capabilities: { preview: false, download: false, listChildren: true },
+    ...overrides,
+  };
+}
+
 function availableResponse(items: WorkspaceFileListItem[], truncated = false): WorkspaceFileListResponse {
   return {
     kind: "workspace_file_list",
@@ -58,7 +78,7 @@ function availableResponse(items: WorkspaceFileListItem[], truncated = false): W
       workspaceKind: "execution_workspace",
       workspaceId: "ws-1",
     },
-    query: { workspace: "auto", mode: "changed", q: null, limit: 100 },
+    query: { workspace: "auto", mode: "changed", q: null, limit: 100, offset: 0 },
     items,
     scannedCount: items.length,
     truncated,
@@ -137,7 +157,7 @@ function unavailableResponse(reason: string): WorkspaceFileListResponse {
     state: "unavailable",
     unavailableReason: reason,
     workspace: null,
-    query: { workspace: "auto", mode: "changed", q: null, limit: 100 },
+    query: { workspace: "auto", mode: "changed", q: null, limit: 100, offset: 0 },
     items: [],
     scannedCount: 0,
     truncated: false,
@@ -606,6 +626,46 @@ describe("WorkspaceFileBrowser", () => {
     });
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  });
+
+  it("loads the selected file's ancestor folders when a parent breadcrumb is open", () => {
+    const selectedPath = "docs/cli/setup-commands.md";
+    const docsResponse = availableResponse([
+      createDirectoryItem({
+        title: "cli",
+        relativePath: "docs/cli",
+        displayPath: "docs/cli/",
+      }),
+    ]);
+    docsResponse.query = { ...docsResponse.query, mode: "all", path: "docs" };
+    const cliResponse = availableResponse([
+      createItem({
+        title: "setup-commands.md",
+        relativePath: selectedPath,
+        displayPath: selectedPath,
+      }),
+    ]);
+    cliResponse.query = { ...cliResponse.query, mode: "all", path: "docs/cli" };
+    useQueryMock.mockImplementation((options: { queryKey: readonly unknown[] }) => {
+      const query = options.queryKey[4] as { path?: string | null } | undefined;
+      if (query?.path === "docs/cli") return ok(cliResponse);
+      return ok(docsResponse);
+    });
+
+    renderBrowser(vi.fn(), {
+      compact: true,
+      autoFocusSearch: false,
+      initialFolderPath: "docs",
+      selectedPath,
+    });
+
+    const childListCall = useQueryMock.mock.calls.find(([options]) => options.queryKey?.[4]?.path === "docs/cli");
+    expect(childListCall?.[0].queryKey[4]).toMatchObject({ path: "docs/cli", offset: 0 });
+    const selected = Array.from(container.querySelectorAll('[role="treeitem"]')).find(
+      (el) => el.getAttribute("title") === selectedPath,
+    );
+    expect(selected?.getAttribute("aria-selected")).toBe("true");
+    expect(container.textContent).toContain("setup-commands.md");
   });
 
   it("lets breadcrumb folders navigate to parent directories", () => {

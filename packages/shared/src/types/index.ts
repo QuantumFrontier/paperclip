@@ -219,6 +219,8 @@ export type {
 export type {
   WorkspaceFileContent,
   WorkspaceFileContentEncoding,
+  WorkspaceFileListDirectoryItem,
+  WorkspaceFileListFileItem,
   WorkspaceFileListItem,
   WorkspaceFileListMode,
   WorkspaceFileListResponse,

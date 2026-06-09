@@ -22,6 +22,7 @@ export interface FileResourceListQuery {
   mode?: WorkspaceFileListMode;
   q?: string | null;
   limit?: number;
+  offset?: number;
 }
 
 function buildQuery(query: FileResourceQuery | FileResourceListQuery): string {
@@ -37,6 +38,7 @@ function buildQuery(query: FileResourceQuery | FileResourceListQuery): string {
   if ("mode" in query && query.mode && query.mode !== "all") params.set("mode", query.mode);
   if ("q" in query && query.q) params.set("q", query.q);
   if ("limit" in query && query.limit) params.set("limit", String(query.limit));
+  if ("offset" in query && query.offset) params.set("offset", String(query.offset));
   return params.toString();
 }
 

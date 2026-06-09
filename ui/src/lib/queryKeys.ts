@@ -97,6 +97,7 @@ export const queryKeys = {
         mode?: string;
         q?: string | null;
         limit?: number;
+        offset?: number;
       } = {},
     ) =>
       ["issues", "file-resources", issueId, "list", options] as const,

@@ -67,6 +67,7 @@ export const workspaceFileListQuerySchema = z.object({
     })
     .optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
 }).refine((value) => Boolean(value.projectId) === Boolean(value.workspaceId), {
   message: "Workspace file target requires both projectId and workspaceId",
   path: ["workspaceId"],

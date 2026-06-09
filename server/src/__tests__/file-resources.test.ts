@@ -644,11 +644,10 @@ describeEmbeddedPostgres("workspace file resources", () => {
   it("enforces default and hard list/search caps", async () => {
     const { projectRoot, executionRoot } = await makeWorkspace();
     const graph = await seedGraph(db, { projectRoot, executionRoot });
-    await fs.mkdir(path.join(projectRoot, "src"), { recursive: true });
     await Promise.all(
       Array.from({ length: 30 }, (_, index) =>
         fs.writeFile(
-          path.join(projectRoot, "src", `file-${String(index).padStart(2, "0")}.ts`),
+          path.join(projectRoot, `file-${String(index).padStart(2, "0")}.ts`),
           "export {}\n",
           "utf8",
         ),
@@ -686,6 +685,57 @@ describeEmbeddedPostgres("workspace file resources", () => {
     expect(tooDeep.status).toBe(200);
     expect(tooDeep.body.items).toEqual([]);
     expect(tooDeep.body.truncated).toBe(true);
+  });
+
+  it("lists one folder level at a time so deep descendants do not hide selected siblings", async () => {
+    const { projectRoot, executionRoot } = await makeWorkspace();
+    const graph = await seedGraph(db, { projectRoot, executionRoot });
+    await fs.mkdir(path.join(projectRoot, "docs", "deep"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "docs", "selected.md"), "# Selected\n", "utf8");
+    await Promise.all(
+      Array.from({ length: 130 }, (_, index) =>
+        fs.writeFile(
+          path.join(projectRoot, "docs", "deep", `generated-${String(index).padStart(3, "0")}.md`),
+          "# Generated\n",
+          "utf8",
+        ),
+      ),
+    );
+
+    const app = createApp(db, {
+      type: "board",
+      userId: "board-user",
+      companyIds: [graph.companyId],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const parent = await request(app)
+      .get(`/api/issues/${graph.issueId}/file-resources/list`)
+      .query({ workspace: "project", path: "docs", mode: "all", limit: 100 });
+
+    expect(parent.status).toBe(200);
+    expect(parent.body.query).toMatchObject({ path: "docs", mode: "all", offset: 0 });
+    expect(parent.body.truncated).toBe(false);
+    expect(parent.body.items.map((item: { kind: string; relativePath: string }) => `${item.kind}:${item.relativePath}`)).toEqual([
+      "directory:docs/deep",
+      "file:docs/selected.md",
+    ]);
+
+    const firstDeepPage = await request(app)
+      .get(`/api/issues/${graph.issueId}/file-resources/list`)
+      .query({ workspace: "project", path: "docs/deep", mode: "all", limit: 100 });
+    expect(firstDeepPage.status).toBe(200);
+    expect(firstDeepPage.body.items).toHaveLength(100);
+    expect(firstDeepPage.body.truncated).toBe(true);
+
+    const secondDeepPage = await request(app)
+      .get(`/api/issues/${graph.issueId}/file-resources/list`)
+      .query({ workspace: "project", path: "docs/deep", mode: "all", limit: 100, offset: 100 });
+    expect(secondDeepPage.status).toBe(200);
+    expect(secondDeepPage.body.query.offset).toBe(100);
+    expect(secondDeepPage.body.items).toHaveLength(30);
+    expect(secondDeepPage.body.truncated).toBe(false);
   });
 
   it("supports recent mode, limit caps, and list activity logging", async () => {

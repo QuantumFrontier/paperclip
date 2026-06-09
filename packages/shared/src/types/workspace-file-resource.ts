@@ -47,7 +47,7 @@ export interface WorkspaceFileContent {
   };
 }
 
-export interface WorkspaceFileListItem {
+export interface WorkspaceFileListFileItem {
   kind: "file";
   provider: "local_fs" | "git_worktree" | string;
   title: string;
@@ -69,6 +69,30 @@ export interface WorkspaceFileListItem {
   };
 }
 
+export interface WorkspaceFileListDirectoryItem {
+  kind: "directory";
+  provider: "local_fs" | "git_worktree" | string;
+  title: string;
+  relativePath: string;
+  displayPath: string;
+  workspaceLabel: string;
+  workspaceKind: WorkspaceFileWorkspaceKind;
+  workspaceId: string;
+  projectId?: string | null;
+  projectName?: string | null;
+  contentType: null;
+  byteSize: null;
+  modifiedAt?: string | null;
+  previewKind: "unsupported";
+  capabilities: {
+    preview: false;
+    download: false;
+    listChildren: true;
+  };
+}
+
+export type WorkspaceFileListItem = WorkspaceFileListFileItem | WorkspaceFileListDirectoryItem;
+
 export interface WorkspaceFileListResponse {
   kind: "workspace_file_list";
   state: "available" | "unavailable";
@@ -87,6 +111,7 @@ export interface WorkspaceFileListResponse {
     path?: string | null;
     q: string | null;
     limit: number;
+    offset: number;
   };
   items: WorkspaceFileListItem[];
   scannedCount: number;
