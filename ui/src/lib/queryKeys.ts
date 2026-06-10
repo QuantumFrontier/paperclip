@@ -120,6 +120,9 @@ export const queryKeys = {
   },
   pipelines: {
     list: (companyId: string) => ["pipelines", companyId] as const,
+    detail: (pipelineId: string) => ["pipelines", "detail", pipelineId] as const,
+    cases: (pipelineId: string) => ["pipelines", "cases", pipelineId] as const,
+    intakeForm: (pipelineId: string) => ["pipelines", "intake-form", pipelineId] as const,
   },
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,

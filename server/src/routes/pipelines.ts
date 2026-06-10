@@ -145,6 +145,37 @@ const upsertPipelineDocumentSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   body: z.string().max(200_000),
 });
+const intakeFieldTypes = new Set(["select", "text", "multiline"]);
+
+function extractIntakeFormFields(stage: typeof pipelineStages.$inferSelect | null) {
+  const baseFields = [{ key: "title", label: "Name", type: "text", required: true, options: [] as string[] }];
+  const variables = stage?.config && typeof stage.config === "object" && !Array.isArray(stage.config)
+    ? (stage.config as { variables?: unknown }).variables
+    : null;
+  if (!Array.isArray(variables)) return baseFields;
+
+  return [
+    ...baseFields,
+    ...variables.flatMap((raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const variable = raw as Record<string, unknown>;
+      if (variable.showInAddForm !== true) return [];
+      if (typeof variable.key !== "string" || variable.key.trim().length === 0) return [];
+      if (typeof variable.label !== "string" || variable.label.trim().length === 0) return [];
+      const type = typeof variable.type === "string" && intakeFieldTypes.has(variable.type) ? variable.type : "text";
+      const options = Array.isArray(variable.options)
+        ? variable.options.filter((option): option is string => typeof option === "string" && option.trim().length > 0)
+        : [];
+      return [{
+        key: variable.key,
+        label: variable.label,
+        type,
+        required: variable.required === true,
+        options,
+      }];
+    }),
+  ];
+}
 
 function isPgUniqueViolation(error: unknown) {
   return (error as { code?: unknown })?.code === "23505";
@@ -370,6 +401,24 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
     ]);
     if (!pipeline) throw notFound("Pipeline not found");
     res.json({ ...pipeline, stages, transitions, documentKeys });
+  });
+
+  router.get("/pipelines/:pipelineId/intake-form", async (req, res) => {
+    const pipelineId = req.params.pipelineId as string;
+    await assertPipelineAccess(db, req, pipelineId);
+    const firstStage = await db
+      .select()
+      .from(pipelineStages)
+      .where(eq(pipelineStages.pipelineId, pipelineId))
+      .orderBy(asc(pipelineStages.position), asc(pipelineStages.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    res.json({
+      pipelineId,
+      stageId: firstStage?.id ?? null,
+      stageName: firstStage?.name ?? null,
+      fields: extractIntakeFormFields(firstStage),
+    });
   });
 
   router.patch("/pipelines/:pipelineId", validate(updatePipelineSchema), async (req, res) => {

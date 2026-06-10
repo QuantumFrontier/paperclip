@@ -59,6 +59,14 @@ export type PipelineStageConfig = Record<string, unknown> & {
   requestChangesToStageKey?: string;
   requireRejectReason?: boolean;
   reviewerKind?: "human" | "any";
+  variables?: Array<{
+    key?: unknown;
+    label?: unknown;
+    type?: unknown;
+    options?: unknown;
+    required?: unknown;
+    showInAddForm?: unknown;
+  }>;
   onEnter?: {
     type?: "run_routine";
     routineId?: string;
@@ -239,6 +247,45 @@ function stageAutomationRoutineIdFromConfig(config?: PipelineStageConfig | null)
   return onEnter?.type === "run_routine" && typeof onEnter.routineId === "string"
     ? onEnter.routineId
     : null;
+}
+
+function addFormVariablesForStage(stage: typeof pipelineStages.$inferSelect) {
+  const variables = stageConfig(stage).variables;
+  if (!Array.isArray(variables)) return [];
+  return variables.filter((variable) =>
+    typeof variable.key === "string" &&
+    variable.key.trim().length > 0 &&
+    typeof variable.label === "string" &&
+    variable.label.trim().length > 0 &&
+    variable.showInAddForm === true
+  );
+}
+
+function isMissingRequiredField(value: unknown) {
+  return value == null || (typeof value === "string" && value.trim().length === 0);
+}
+
+function validateAddFormFieldsForStage(stage: typeof pipelineStages.$inferSelect, fields: Record<string, unknown>) {
+  for (const variable of addFormVariablesForStage(stage)) {
+    const key = variable.key as string;
+    if (variable.required === true && isMissingRequiredField(fields[key])) {
+      throw unprocessable(`${variable.label} is required`, {
+        code: "required_field",
+        fieldKey: key,
+        label: variable.label,
+      });
+    }
+    if (variable.type === "select" && !isMissingRequiredField(fields[key]) && Array.isArray(variable.options)) {
+      const options = variable.options.filter((option): option is string => typeof option === "string");
+      if (!options.includes(String(fields[key]))) {
+        throw unprocessable(`${variable.label} must use one of the available choices`, {
+          code: "invalid_select_value",
+          fieldKey: key,
+          label: variable.label,
+        });
+      }
+    }
+  }
 }
 
 function buildCaseDeepLink(input: { pipelineId: string; caseId: string }) {
@@ -1538,6 +1585,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
             .limit(1)
             .then((rows) => rows[0] ?? null);
         if (!stage) throw unprocessable("Pipeline has no stages", { code: "validation" });
+        validateAddFormFieldsForStage(stage, input.fields ?? {});
 
         const [inserted] = await tx
           .insert(pipelineCases)

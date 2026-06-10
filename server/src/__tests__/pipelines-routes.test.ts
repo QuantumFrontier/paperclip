@@ -244,6 +244,77 @@ describeEmbeddedPostgres("pipeline routes", () => {
     await http.delete(`/api/pipelines/${pipelineId}/stages/${stageId}?moveCasesToStageId=${qaStage.body.id}`).expect(200);
   });
 
+  it("exposes first-stage add form fields and returns row failures for missing required values", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+    const pipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({
+        key: "add-form",
+        name: "Add form",
+        stages: [
+          {
+            key: "drafting",
+            name: "Drafting",
+            kind: "open",
+            position: 100,
+            config: {
+              variables: [
+                {
+                  key: "type",
+                  label: "Type",
+                  type: "select",
+                  options: ["Blog post", "Launch tweet"],
+                  required: true,
+                  showInAddForm: true,
+                },
+                {
+                  key: "internalOnly",
+                  label: "Internal only",
+                  type: "text",
+                  required: true,
+                  showInAddForm: false,
+                },
+              ],
+            },
+          },
+          { key: "done", name: "Done", kind: "done", position: 900 },
+          { key: "cancelled", name: "Cancelled", kind: "cancelled", position: 1000 },
+        ],
+      })
+      .expect(201);
+
+    const form = await http.get(`/api/pipelines/${pipeline.body.id}/intake-form`).expect(200);
+    expect(form.body).toMatchObject({
+      pipelineId: pipeline.body.id,
+      stageId: pipeline.body.stages[0].id,
+      stageName: "Drafting",
+      fields: [
+        { key: "title", label: "Name", type: "text", required: true },
+        { key: "type", label: "Type", type: "select", required: true, options: ["Blog post", "Launch tweet"] },
+      ],
+    });
+
+    const batch = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases/batch`)
+      .send({
+        items: [
+          { title: "Launch blog post", fields: { type: "Blog post" } },
+          { title: "Launch tweet", fields: {} },
+        ],
+      })
+      .expect(200);
+
+    expect(batch.body[0].ok).toBe(true);
+    expect(batch.body[1]).toMatchObject({
+      ok: false,
+      error: {
+        status: 422,
+        details: { code: "required_field", fieldKey: "type", label: "Type" },
+      },
+    });
+  });
+
   it("stamps and clears pipeline automation routine origins when stage wiring changes", async () => {
     const company = await seedCompany();
     const http = request(app(boardActor));
