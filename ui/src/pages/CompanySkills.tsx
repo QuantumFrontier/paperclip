@@ -61,6 +61,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { buildLineDiff, type DiffRow } from "../lib/line-diff";
 import { cn, relativeTime } from "../lib/utils";
+import {
+  parseSkillRoute,
+  skillRoute,
+  withRouteSkill,
+  resolveSkillRouteToken,
+  type CompanySkillRouteSubject,
+} from "../lib/company-skill-routes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -240,51 +247,6 @@ function formatProjectScanSummary(result: CompanySkillProjectScanResult) {
 function fileIcon(kind: CompanySkillFileInventoryEntry["kind"]) {
   if (kind === "script" || kind === "reference") return FileCode2;
   return FileText;
-}
-
-function encodeSkillFilePath(filePath: string) {
-  return filePath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
-}
-
-function decodeSkillFilePath(filePath: string | undefined) {
-  if (!filePath) return "SKILL.md";
-  return filePath
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => {
-      try {
-        return decodeURIComponent(segment);
-      } catch {
-        return segment;
-      }
-    })
-    .join("/");
-}
-
-function parseSkillRoute(routePath: string | undefined) {
-  const segments = (routePath ?? "").split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return { skillId: null, filePath: "SKILL.md" };
-  }
-
-  const [rawSkillId, rawMode, ...rest] = segments;
-  const skillId = rawSkillId ? decodeURIComponent(rawSkillId) : null;
-  if (!skillId) {
-    return { skillId: null, filePath: "SKILL.md" };
-  }
-
-  if (rawMode === "files") {
-    return {
-      skillId,
-      filePath: decodeSkillFilePath(rest.join("/")),
-    };
-  }
-
-  return { skillId, filePath: "SKILL.md" };
-}
-
-function skillRoute(skillId: string, filePath?: string | null) {
-  return filePath ? `/skills/${skillId}/files/${encodeSkillFilePath(filePath)}` : `/skills/${skillId}`;
 }
 
 function catalogSkillRoute(catalogRef: string) {
@@ -2205,7 +2167,7 @@ function SkillTree({
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
   onSelectPath: (path: string) => void;
-  fileHref?: (skillId: string, path: string) => string;
+  fileHref?: (skillId: string, path?: string | null) => string;
   depth?: number;
 }) {
   return (
@@ -2266,7 +2228,7 @@ function SkillTree({
               node.path === selectedPath && "text-foreground",
             )}
             style={{ paddingInlineStart: `${SKILL_TREE_BASE_INDENT + depth * SKILL_TREE_STEP_INDENT}px` }}
-            to={node.path ? fileHref(skillId, node.path) : skillRoute(skillId)}
+            to={fileHref(skillId, node.path)}
             onClick={() => node.path && onSelectPath(node.path)}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -2350,7 +2312,7 @@ function SkillList({
               )}
             >
               <Link
-                to={skillRoute(skill.id)}
+                to={skillRoute(skill, skills)}
                 className="flex min-w-0 items-center self-stretch pr-2 text-left no-underline"
                 onClick={() => onSelectSkill(skill.id)}
               >
@@ -2393,6 +2355,7 @@ function SkillList({
                   expandedDirs={expandedDirs[skill.id] ?? new Set<string>()}
                   onToggleDir={(path) => onToggleDir(skill.id, path)}
                   onSelectPath={(path) => onSelectPath(skill.id, path)}
+                  fileHref={(_, path) => skillRoute(skill, skills, path)}
                   depth={1}
                 />
               </div>
@@ -2564,6 +2527,7 @@ function SkillVersionDiffDialog({
 
 export function SkillDetailPage({
   detail,
+  routeSkills,
   loading,
   activeTab,
   onTabChange,
@@ -2601,6 +2565,7 @@ export function SkillDetailPage({
   deletePending,
 }: {
   detail: CompanySkillDetail | null | undefined;
+  routeSkills?: CompanySkillRouteSubject[];
   loading: boolean;
   activeTab: SkillDetailTab;
   onTabChange: (tab: SkillDetailTab) => void;
@@ -2686,6 +2651,7 @@ export function SkillDetailPage({
             expandedDirs={expandedDirs}
             onToggleDir={onToggleDir}
             onSelectPath={onSelectPath}
+            fileHref={(_, path) => skillRoute(skill, routeSkills ?? [skill], path)}
           />
         </aside>
         <section className="min-w-0 lg:pl-5">
@@ -3556,7 +3522,7 @@ export function CompanySkills() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const parsedRoute = useMemo(() => parseSkillRoute(routePath), [routePath]);
-  const routeSkillId = parsedRoute.skillId;
+  const routeSkillToken = parsedRoute.skillToken;
   const selectedPath = parsedRoute.filePath;
   const viewParam = searchParams.get("view");
   const activeView: "installed" | "catalog" = viewParam === "catalog" ? "catalog" : "installed";
@@ -3577,7 +3543,7 @@ export function CompanySkills() {
   const discoveryCategory = searchParams.get("category");
   // Discovery grid owns `/skills` whenever no specific skill or catalog entry is
   // selected; selecting either drops into the existing master/detail surfaces.
-  const isDiscovery = !routeSkillId && !selectedCatalogRef;
+  const isDiscovery = !routeSkillToken && !selectedCatalogRef;
 
   function setDiscoveryTab(tab: DiscoveryTab) {
     setSearchParams((current) => {
@@ -3644,9 +3610,9 @@ export function CompanySkills() {
   useEffect(() => {
     setBreadcrumbs([
       { label: "Skills", href: "/skills" },
-      ...(routeSkillId ? [{ label: "Detail" }] : []),
+      ...(routeSkillToken ? [{ label: "Detail" }] : []),
     ]);
-  }, [routeSkillId, setBreadcrumbs]);
+  }, [routeSkillToken, setBreadcrumbs]);
 
   const skillsQuery = useQuery({
     queryKey: queryKeys.companySkills.list(selectedCompanyId ?? ""),
@@ -3654,9 +3620,15 @@ export function CompanySkills() {
     enabled: Boolean(selectedCompanyId),
   });
 
+  const installedSkills = skillsQuery.data ?? [];
+  const routeResolution = useMemo(
+    () => resolveSkillRouteToken(routeSkillToken, installedSkills),
+    [routeSkillToken, installedSkills],
+  );
+
   // At `/skills` root the discovery grid is shown, so we no longer auto-select
   // the first skill; a skill is only "selected" once it is in the route.
-  const selectedSkillId = routeSkillId;
+  const selectedSkillId = routeResolution.skill?.id ?? null;
 
   const detailQuery = useQuery({
     queryKey: queryKeys.companySkills.detail(selectedCompanyId ?? "", selectedSkillId ?? ""),
@@ -3686,6 +3658,18 @@ export function CompanySkills() {
     ),
     staleTime: 60_000,
   });
+
+  useEffect(() => {
+    if (!routeResolution.skill || !routeResolution.shouldRedirect || skillsQuery.isLoading) return;
+    const search = searchParams.toString();
+    navigate(
+      {
+        pathname: skillRoute(routeResolution.skill, installedSkills, selectedPath),
+        search: search ? `?${search}` : "",
+      },
+      { replace: true },
+    );
+  }, [installedSkills, navigate, routeResolution, searchParams, selectedPath, skillsQuery.isLoading]);
 
   useEffect(() => {
     setExpandedSkillId(selectedSkillId);
@@ -3734,6 +3718,16 @@ export function CompanySkills() {
   const activeDetail = detailQuery.data ?? displayedDetail;
   const activeFile = fileQuery.data ?? displayedFile;
 
+  function routeForSkill(skill: CompanySkillRouteSubject, path?: string | null) {
+    return skillRoute(skill, withRouteSkill(installedSkills, skill), path);
+  }
+
+  function routeForSkillId(skillId: string, path?: string | null) {
+    const skill = installedSkills.find((entry) => entry.id === skillId)
+      ?? (activeDetail?.id === skillId ? activeDetail : null);
+    return skill ? routeForSkill(skill, path) : skillRoute(skillId, path);
+  }
+
   function openDeleteDialog() {
     setDeleteTargetSkillId(selectedSkillId);
     setDeleteTargetDetail(activeDetail ?? null);
@@ -3752,7 +3746,7 @@ export function CompanySkills() {
     mutationFn: (importSource: string) => companySkillsApi.importFromSource(selectedCompanyId!, importSource),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) });
-      if (result.imported[0]) navigate(skillRoute(result.imported[0].id));
+      if (result.imported[0]) navigate(routeForSkill(result.imported[0]));
       pushToast({
         tone: "success",
         title: "Skills imported",
@@ -3776,7 +3770,7 @@ export function CompanySkills() {
     mutationFn: (payload: CompanySkillCreateRequest) => companySkillsApi.create(selectedCompanyId!, payload),
     onSuccess: async (skill) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.list(selectedCompanyId!) });
-      navigate(skillRoute(skill.id));
+      navigate(routeForSkill(skill));
       setCreateDialogOpen(false);
       setCreateError(null);
       setCreateDraft(buildBlankSkillDraft());
@@ -3917,7 +3911,7 @@ export function CompanySkills() {
         queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.updateStatus(selectedCompanyId!, selectedSkillId!) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.companySkills.file(selectedCompanyId!, selectedSkillId!, selectedPath) }),
       ]);
-      navigate(skillRoute(skill.id, selectedPath));
+      navigate(routeForSkill(skill, selectedPath));
       pushToast({
         tone: "success",
         title: "Skill updated",
@@ -3960,7 +3954,6 @@ export function CompanySkills() {
     enabled: Boolean(selectedCompanyId),
   });
 
-  const installedSkills = skillsQuery.data ?? [];
   const installedByKey = useMemo(
     () => new Map(installedSkills.map((skill) => [skill.key, skill])),
     [installedSkills],
@@ -4061,7 +4054,7 @@ export function CompanySkills() {
       }
       if (result.action === "created") {
         setViewParam("installed");
-        navigate(skillRoute(result.skill.id));
+        navigate(routeForSkill(result.skill));
       }
     },
     onError: (error) => {
@@ -4214,7 +4207,7 @@ export function CompanySkills() {
   // detail route, catalog-only skills open the catalog detail surface.
   function openDiscoveryCard(card: DiscoveryCard) {
     if (card.skillId) {
-      navigate(skillRoute(card.skillId));
+      navigate(routeForSkillId(card.skillId));
       return;
     }
     if (card.catalogRef) {
@@ -4433,6 +4426,7 @@ export function CompanySkills() {
       ) : activeView === "installed" && selectedSkillId ? (
         <SkillDetailPage
           detail={activeDetail}
+          routeSkills={installedSkills}
           loading={skillsQuery.isLoading || detailQuery.isLoading}
           activeTab={detailTab}
           onTabChange={setDetailTab}
@@ -4463,7 +4457,7 @@ export function CompanySkills() {
           }}
           onSelectPath={(path) => {
             setDetailTab("files");
-            navigate(skillRoute(selectedSkillId, path));
+            navigate(routeForSkillId(selectedSkillId, path));
           }}
           updateStatus={updateStatusQuery.data}
           updateStatusLoading={updateStatusQuery.isLoading}
@@ -4724,7 +4718,7 @@ export function CompanySkills() {
                 onUpdate={() => selectedCatalogSkill && openInstallDialog(selectedCatalogSkill)}
                 onOpenInstalled={(skillId) => {
                   setViewParam("installed");
-                  navigate(skillRoute(skillId));
+                  navigate(routeForSkillId(skillId));
                 }}
                 loadingPrimaryAction={installCatalog.isPending}
               />
