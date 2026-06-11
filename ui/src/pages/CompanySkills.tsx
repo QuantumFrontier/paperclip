@@ -6,6 +6,7 @@ import type {
   Agent,
   CatalogSkill,
   CatalogSkillFileDetail,
+  CatalogSkillSource,
   CompanySkillCompatibility,
   CompanySkillCreateRequest,
   CompanySkillDetail,
@@ -1708,7 +1709,7 @@ function CatalogDetailPane({
     cta = (
       <Button onClick={onInstall} disabled={loadingPrimaryAction}>
         {skill.trustLevel === "scripts_executables" ? <AlertTriangle className="mr-1.5 h-3.5 w-3.5" /> : <Download className="mr-1.5 h-3.5 w-3.5" />}
-        {loadingPrimaryAction ? "Preparing..." : (skill.kind === "bundled" ? "Install bundled skill" : "Install optional skill")}
+        {loadingPrimaryAction ? "Preparing..." : "Install skill in this organization"}
       </Button>
     );
   } else if (hashOutOfSync) {
@@ -2388,6 +2389,20 @@ function versionLabel(version: CompanySkillVersion | null | undefined) {
   return `v${version.revisionNumber}${version.label ? ` · ${version.label}` : ""}`;
 }
 
+export function getSkillVersionDiffSelection(versions: CompanySkillVersion[], targetVersionId?: string | null) {
+  const sorted = [...versions].sort((a, b) => b.revisionNumber - a.revisionNumber);
+  const right = targetVersionId
+    ? sorted.find((version) => version.id === targetVersionId) ?? null
+    : sorted[0] ?? null;
+  if (!right) return { leftVersionId: null, rightVersionId: null };
+
+  const left = sorted.find((version) => version.revisionNumber < right.revisionNumber) ?? null;
+  return {
+    leftVersionId: left?.id ?? null,
+    rightVersionId: right.id,
+  };
+}
+
 function SkillVersionDiffDialog({
   open,
   onOpenChange,
@@ -2406,8 +2421,8 @@ function SkillVersionDiffDialog({
   onRightVersionChange: (id: string | null) => void;
 }) {
   const sorted = [...versions].sort((a, b) => b.revisionNumber - a.revisionNumber);
-  const left = sorted.find((version) => version.id === leftVersionId) ?? sorted[1] ?? null;
-  const right = sorted.find((version) => version.id === rightVersionId) ?? sorted[0] ?? null;
+  const left = sorted.find((version) => version.id === leftVersionId) ?? null;
+  const right = sorted.find((version) => version.id === rightVersionId) ?? null;
   const allPaths = useMemo(() => {
     const paths = new Set<string>();
     for (const file of left?.fileInventory ?? []) paths.add(file.path);
@@ -2454,10 +2469,11 @@ function SkillVersionDiffDialog({
             <label className="flex items-center gap-2">
               <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 font-medium uppercase tracking-wider text-red-400">Old</span>
               <select
-                value={left?.id ?? ""}
+                value={leftVersionId ?? ""}
                 onChange={(event) => onLeftVersionChange(event.target.value || null)}
                 className="h-8 w-44 rounded-md border border-border bg-background px-2 text-xs"
               >
+                <option value="">Initial</option>
                 {sorted.map((version) => (
                   <option key={version.id} value={version.id}>{versionLabel(version)}</option>
                 ))}
@@ -2495,9 +2511,9 @@ function SkillVersionDiffDialog({
             ))}
           </aside>
           <div className="min-w-0 flex-1 overflow-auto rounded-md border border-border text-xs">
-            {!left || !right ? (
-              <div className="p-6 text-center text-sm text-muted-foreground">Select two versions to compare.</div>
-            ) : left.id === right.id ? (
+            {!right ? (
+              <div className="p-6 text-center text-sm text-muted-foreground">Select a version to compare.</div>
+            ) : left?.id === right.id ? (
               <div className="p-6 text-center text-sm text-muted-foreground">Both sides are the same version.</div>
             ) : (
               <div className="font-mono text-[12px] leading-6">
@@ -2529,6 +2545,7 @@ function SkillVersionDiffDialog({
 
 export function SkillDetailPage({
   detail,
+  catalogSource,
   routeSkills,
   loading,
   activeTab,
@@ -2567,6 +2584,7 @@ export function SkillDetailPage({
   deletePending,
 }: {
   detail: CompanySkillDetail | null | undefined;
+  catalogSource?: CatalogSkillSource | null;
   routeSkills?: CompanySkillRouteSubject[];
   loading: boolean;
   activeTab: SkillDetailTab;
@@ -2623,6 +2641,13 @@ export function SkillDetailPage({
   const [leftVersionId, setLeftVersionId] = useState<string | null>(null);
   const [rightVersionId, setRightVersionId] = useState<string | null>(null);
 
+  function openVersionDiff(targetVersionId?: string | null) {
+    const selection = getSkillVersionDiffSelection(sortedVersions, targetVersionId);
+    setLeftVersionId(selection.leftVersionId);
+    setRightVersionId(selection.rightVersionId);
+    setDiffOpen(Boolean(selection.rightVersionId));
+  }
+
   // Track unsaved edits so we can float a save bar and warn before the page is
   // unloaded with a dirty draft (PAP-10907 J).
   const savedFileContent = file?.content ?? "";
@@ -2654,9 +2679,27 @@ export function SkillDetailPage({
   // Look up the richer agent record (icon, paused) for agents using this skill.
   const attachAgentMetaById = new Map(attachAgents.map((agent) => [agent.id, agent]));
 
-  // Sidebar provenance: where this skill came from (org / path), linked when the
-  // locator resolves to a URL (PAP-10907).
+  // Sidebar provenance: prefer the rich upstream attribution from the catalog
+  // entry (GitHub owner/repo/path with a real link). Catalog-installed skills
+  // only persist a local staging path, so without this they'd show a long,
+  // unhelpful filesystem path (PAP-10907).
+  const githubSource = catalogSource && catalogSource.type === "github" ? catalogSource : null;
+  const githubLabel = githubSource
+    ? githubSource.hostname === "github.com"
+      ? "GitHub"
+      : githubSource.hostname
+    : null;
+  const githubRepoText = githubSource
+    ? `${githubSource.owner}/${githubSource.repo}${githubSource.path ? `/${githubSource.path}` : ""}`
+    : null;
+  const githubHref = githubSource
+    ? githubSource.url
+      ?? `https://${githubSource.hostname}/${githubSource.owner}/${githubSource.repo}/tree/${githubSource.ref}/${githubSource.path}`.replace(/\/$/, "")
+    : null;
+  // Fallback for non-catalog skills: the recorded locator/path, middle-truncated
+  // so long file paths stay readable in the narrow sidebar.
   const sourceLocatorText = skill.sourcePath || skill.sourceLocator || null;
+  const sourceLocatorDisplay = sourceLocatorText ? middleTruncate(sourceLocatorText, 44) : null;
   const sourceHref =
     skill.homepageUrl
     ?? (sourceLocatorText && /^(https?:\/\/|[\w.-]+\.[a-z]{2,}\/)/i.test(sourceLocatorText)
@@ -2786,13 +2829,10 @@ export function SkillDetailPage({
             {versionsLoading ? "Loading versions..." : `${versions.length} ${versions.length === 1 ? "version" : "versions"}`}
           </div>
           <Button
+            type="button"
             variant="outline"
             size="sm"
-            onClick={() => {
-              setLeftVersionId(sortedVersions[1]?.id ?? sortedVersions[0]?.id ?? null);
-              setRightVersionId(sortedVersions[0]?.id ?? null);
-              setDiffOpen(true);
-            }}
+            onClick={() => openVersionDiff()}
             disabled={sortedVersions.length < 2}
           >
             <History className="mr-1.5 h-3.5 w-3.5" /> Compare
@@ -2813,14 +2853,10 @@ export function SkillDetailPage({
                   </div>
                 </div>
                 <Button
+                  type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => {
-                    setLeftVersionId(sortedVersions.find((candidate) => candidate.revisionNumber === version.revisionNumber - 1)?.id ?? null);
-                    setRightVersionId(version.id);
-                    setDiffOpen(true);
-                  }}
-                  disabled={sortedVersions.length < 2}
+                  onClick={() => openVersionDiff(version.id)}
                 >
                   View diff
                 </Button>
@@ -3100,29 +3136,55 @@ export function SkillDetailPage({
               (PAP-10907). */}
           <section>
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Source</div>
-            <div className="flex items-start gap-2 text-sm">
-              <SourceIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <div className="min-w-0">
-                <div className="text-foreground">{source.label}</div>
-                {sourceLocatorText ? (
-                  sourceHref ? (
-                    <a
-                      href={sourceHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-0.5 inline-flex max-w-full items-center gap-1 break-all text-xs text-muted-foreground no-underline transition-colors hover:text-foreground"
-                    >
-                      <span className="truncate">{sourceLocatorText}</span>
-                      <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
-                    </a>
-                  ) : (
-                    <div className="mt-0.5 break-all text-xs text-muted-foreground">{sourceLocatorText}</div>
-                  )
-                ) : (
-                  <div className="mt-0.5 text-xs text-muted-foreground">{source.managedLabel}</div>
-                )}
+            {githubSource ? (
+              <div className="flex items-start gap-2 text-sm">
+                <Github className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <div className="min-w-0">
+                  <div className="text-foreground">{githubLabel}</div>
+                  <a
+                    href={githubHref ?? undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={githubRepoText ?? undefined}
+                    className="mt-0.5 flex max-w-full items-center gap-1 text-xs text-muted-foreground no-underline transition-colors hover:text-foreground"
+                  >
+                    <span className="truncate">{githubRepoText}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+                  </a>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={githubSource.commit}>
+                    {githubSource.ref}
+                    {githubSource.commit ? ` · ${githubSource.commit.slice(0, 7)}` : ""}
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-start gap-2 text-sm">
+                <SourceIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <div className="min-w-0">
+                  <div className="text-foreground">{source.label}</div>
+                  {sourceLocatorDisplay ? (
+                    sourceHref ? (
+                      <a
+                        href={sourceHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={sourceLocatorText ?? undefined}
+                        className="mt-0.5 flex max-w-full items-center gap-1 text-xs text-muted-foreground no-underline transition-colors hover:text-foreground"
+                      >
+                        <span className="truncate">{sourceLocatorDisplay}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      </a>
+                    ) : (
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground" title={sourceLocatorText ?? undefined}>
+                        {sourceLocatorDisplay}
+                      </div>
+                    )
+                  ) : (
+                    <div className="mt-0.5 text-xs text-muted-foreground">{source.managedLabel}</div>
+                  )}
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Revision / update controls sit under Agents, above the config gear
@@ -3162,7 +3224,7 @@ export function SkillDetailPage({
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground"
+              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground"
             >
               <Settings className="h-4 w-4 shrink-0" />
               <span className="flex-1">Settings</span>
@@ -4296,6 +4358,19 @@ export function CompanySkills() {
     }
   }
 
+  // "Back to store" returns to the discovery grid while keeping the tab /
+  // category / source filters the user arrived with (PAP-10907).
+  const backToStoreParams = new URLSearchParams(searchParams);
+  backToStoreParams.delete("catalog");
+  const backToStoreParamString = backToStoreParams.toString();
+  const backToStoreHref = backToStoreParamString ? `/skills?${backToStoreParamString}` : "/skills";
+
+  // Surface the upstream catalog source (GitHub owner/repo/path) on the installed
+  // skill detail, matched by canonical key (PAP-10907).
+  const catalogSourceForDetail = activeDetail
+    ? (catalogListQuery.data ?? []).find((entry) => entry.key === activeDetail.key)?.source ?? null
+    : null;
+
   return (
     <>
       <Dialog open={deleteOpen} onOpenChange={closeDeleteDialog}>
@@ -4506,6 +4581,7 @@ export function CompanySkills() {
       ) : activeView === "installed" && selectedSkillId ? (
         <SkillDetailPage
           detail={activeDetail}
+          catalogSource={catalogSourceForDetail}
           routeSkills={installedSkills}
           loading={skillsQuery.isLoading || detailQuery.isLoading}
           activeTab={detailTab}
@@ -4561,7 +4637,7 @@ export function CompanySkills() {
         <div className="min-h-[calc(100vh-12rem)]">
           <div className="border-b border-border px-4 py-3">
             <Link
-              to="/skills"
+              to={backToStoreHref}
               className="inline-flex items-center gap-1.5 text-sm text-muted-foreground no-underline transition-colors hover:text-foreground"
             >
               <ChevronLeft className="h-4 w-4" />

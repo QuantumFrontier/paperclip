@@ -127,6 +127,16 @@ function SkillDetailHarness({ initialTab = "overview" as DetailTab }: { initialT
   return (
     <SkillDetailPage
       detail={MOCK_DETAIL}
+      catalogSource={{
+        type: "github",
+        hostname: "github.com",
+        owner: "mvanhorn",
+        repo: "last30days-skill",
+        ref: "v3.3.0",
+        commit: "daca71f89eb71d0d56d01a43ed7627aa919dba4f",
+        path: "skills/last30days",
+        url: "https://github.com/mvanhorn/last30days-skill/tree/v3.3.0/skills/last30days",
+      }}
       loading={false}
       activeTab={activeTab}
       onTabChange={setActiveTab}
