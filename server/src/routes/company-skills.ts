@@ -458,6 +458,7 @@ export function companySkillRoutes(db: Db) {
         skillId,
         String(req.body.path ?? ""),
         String(req.body.content ?? ""),
+        skillActor(req),
       );
 
       const actor = getActorInfo(req);

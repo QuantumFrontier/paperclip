@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { agents, companies, companySkills, createDb } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -409,6 +409,16 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     const version = await svc.createVersion(companyId, skillId, {}, { type: "user", userId: "board" });
 
     await expect(svc.resolveRequestedSkillEntries(companyId, [
+      "pinned-skill",
+    ])).resolves.toEqual([
+      { key: `company/${companyId}/pinned-skill`, versionId: version.id },
+    ]);
+    await expect(svc.resolveRequestedSkillEntries(companyId, [
+      { key: "pinned-skill", versionId: null },
+    ])).resolves.toEqual([
+      { key: `company/${companyId}/pinned-skill`, versionId: version.id },
+    ]);
+    await expect(svc.resolveRequestedSkillEntries(companyId, [
       { key: "pinned-skill", versionId: version.id },
     ])).resolves.toEqual([
       { key: `company/${companyId}/pinned-skill`, versionId: version.id },
@@ -758,5 +768,151 @@ describeEmbeddedPostgres("companySkillService.list", () => {
     await expect(fs.readFile(path.join(entry!.source, "SKILL.md"), "utf8")).resolves.toBe(
       "# Runtime Coach\n\nRecovered from DB.\n",
     );
+  });
+
+  it("falls back to stored markdown when reading SKILL.md from a missing local source", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    const skillKey = `company/${companyId}/missing-reader`;
+    const missingSkillDir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-missing-read-skill-")), "gone");
+    cleanupDirs.add(path.dirname(missingSkillDir));
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: skillKey,
+      slug: "missing-reader",
+      name: "Missing Reader",
+      description: null,
+      markdown: "# Missing Reader\n\nRecovered from DB.\n",
+      sourceType: "local_path",
+      sourceLocator: missingSkillDir,
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [
+        { path: "SKILL.md", kind: "skill" },
+        { path: "references/guide.md", kind: "reference" },
+      ],
+      metadata: { sourceKind: "local_path" },
+    });
+    await db.insert(agents).values({
+      id: randomUUID(),
+      companyId,
+      name: "Reader",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {
+        paperclipSkillSync: {
+          desiredSkills: [skillKey],
+        },
+      },
+    });
+
+    await expect(svc.readFile(companyId, skillId, "SKILL.md")).resolves.toMatchObject({
+      path: "SKILL.md",
+      content: "# Missing Reader\n\nRecovered from DB.\n",
+    });
+    await expect(svc.readFile(companyId, skillId, "references/guide.md")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("reads root-level SKILL.md for github skills with a '.' repoSkillDir", async () => {
+    const companyId = randomUUID();
+    const skillId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(companySkills).values({
+      id: skillId,
+      companyId,
+      key: `company/${companyId}/root-skill`,
+      slug: "root-skill",
+      name: "Root Skill",
+      description: null,
+      markdown: "# Root Skill (stored)\n",
+      sourceType: "github",
+      sourceLocator: "https://github.com/acme/root-skill",
+      sourceRef: "main",
+      trustLevel: "markdown_only",
+      compatibility: "compatible",
+      fileInventory: [{ path: "SKILL.md", kind: "skill" }],
+      metadata: { owner: "acme", repo: "root-skill", ref: "main", repoSkillDir: "." },
+    });
+
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL) => {
+      requestedUrls.push(String(url));
+      return new Response("# Root Skill (remote)\n", { status: 200 });
+    });
+    try {
+      await expect(svc.readFile(companyId, skillId, "SKILL.md")).resolves.toMatchObject({
+        content: "# Root Skill (remote)\n",
+      });
+      expect(requestedUrls).toEqual([
+        "https://raw.githubusercontent.com/acme/root-skill/main/SKILL.md",
+      ]);
+
+      vi.stubGlobal("fetch", async () => {
+        throw new Error("network down");
+      });
+      await expect(svc.readFile(companyId, skillId, "SKILL.md")).resolves.toMatchObject({
+        content: "# Root Skill (stored)\n",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("seeds an initial version on create and snapshots a version on each changed save", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const skill = await svc.createLocalSkill(
+      companyId,
+      { name: "Versioned Editor", description: "Edits with history" },
+      { type: "user", userId: "board" },
+    );
+    expect(skill.currentVersionId).not.toBeNull();
+    let versions = await svc.listVersions(companyId, skill.id);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({
+      revisionNumber: 1,
+      label: "Initial version",
+      authorUserId: "board",
+    });
+    expect(skill.currentVersionId).toBe(versions[0]!.id);
+
+    const editedMarkdown = "---\nname: Versioned Editor\n---\n\n# Versioned Editor\n\nEdited body.\n";
+    await expect(svc.updateFile(companyId, skill.id, "SKILL.md", editedMarkdown, { type: "user", userId: "board" }))
+      .resolves.toMatchObject({ path: "SKILL.md", content: editedMarkdown });
+    versions = await svc.listVersions(companyId, skill.id);
+    expect(versions).toHaveLength(2);
+    expect(versions[0]).toMatchObject({ revisionNumber: 2, authorUserId: "board" });
+    expect(versions[0]!.fileInventory).toEqual([
+      expect.objectContaining({ path: "SKILL.md", content: editedMarkdown }),
+    ]);
+    await expect(svc.getById(companyId, skill.id)).resolves.toMatchObject({
+      currentVersionId: versions[0]!.id,
+    });
+
+    await svc.updateFile(companyId, skill.id, "SKILL.md", editedMarkdown, { type: "user", userId: "board" });
+    versions = await svc.listVersions(companyId, skill.id);
+    expect(versions).toHaveLength(2);
   });
 });

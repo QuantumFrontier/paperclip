@@ -3011,12 +3011,15 @@ export function companySkillService(db: Db) {
 
     if (skill.sourceType === "local_path" || skill.sourceType === "catalog") {
       const absolutePath = resolveLocalSkillFilePath(skill, normalizedPath);
-      if (absolutePath) {
-        content = await fs.readFile(absolutePath, "utf8");
+      const diskContent = absolutePath
+        ? await fs.readFile(absolutePath, "utf8").catch(() => null)
+        : null;
+      if (diskContent !== null) {
+        content = diskContent;
       } else if (normalizedPath === "SKILL.md") {
         content = skill.markdown;
       } else {
-        throw notFound("Skill file not found");
+        throw notFound("Skill file is unavailable: the skill source directory is missing.");
       }
     } else if (skill.sourceType === "github" || skill.sourceType === "skills_sh") {
       const metadata = getSkillMeta(skill);
@@ -3024,12 +3027,25 @@ export function companySkillService(db: Db) {
       const repo = asString(metadata.repo);
       const hostname = asString(metadata.hostname) || "github.com";
       const ref = skill.sourceRef ?? asString(metadata.ref) ?? "main";
-      const repoSkillDir = normalizeGitHubSkillDirectory(asString(metadata.repoSkillDir), skill.slug);
+      const rawRepoSkillDir = asString(metadata.repoSkillDir);
+      // An explicit "."/"" repoSkillDir means SKILL.md lives at the repo root;
+      // only fall back to the slug subdirectory when metadata is absent.
+      const repoSkillDir = rawRepoSkillDir == null
+        ? normalizeGitHubSkillDirectory(rawRepoSkillDir, skill.slug)
+        : normalizeGitHubSkillDirectory(rawRepoSkillDir, "");
       if (!owner || !repo) {
         throw unprocessable("Skill source metadata is incomplete.");
       }
       const repoPath = normalizePortablePath(path.posix.join(repoSkillDir, normalizedPath));
-      content = await fetchText(resolveRawGitHubUrl(hostname, owner, repo, ref, repoPath));
+      try {
+        content = await fetchText(resolveRawGitHubUrl(hostname, owner, repo, ref, repoPath));
+      } catch (error) {
+        if (normalizedPath === "SKILL.md" && skill.markdown) {
+          content = skill.markdown;
+        } else {
+          throw error;
+        }
+      }
     } else if (skill.sourceType === "url") {
       if (normalizedPath !== "SKILL.md") {
         throw notFound("This skill source only exposes SKILL.md");
@@ -3211,10 +3227,17 @@ export function companySkillService(db: Db) {
         })
         .where(and(eq(companySkills.id, forkSource.id), eq(companySkills.companyId, companyId)));
     }
-    return row ? toCompanySkill(row) : created;
+    await createVersion(companyId, created.id, { label: "Initial version" }, actor);
+    return (await getById(companyId, created.id)) ?? (row ? toCompanySkill(row) : created);
   }
 
-  async function updateFile(companyId: string, skillId: string, relativePath: string, content: string): Promise<CompanySkillFileDetail> {
+  async function updateFile(
+    companyId: string,
+    skillId: string,
+    relativePath: string,
+    content: string,
+    actor: SkillActor | null = null,
+  ): Promise<CompanySkillFileDetail> {
     await ensureSkillInventoryCurrent(companyId);
     const skill = await getById(companyId, skillId);
     if (!skill) throw notFound("Skill not found");
@@ -3228,6 +3251,7 @@ export function companySkillService(db: Db) {
     const absolutePath = resolveLocalSkillFilePath(skill, normalizedPath);
     if (!absolutePath) throw notFound("Skill file not found");
 
+    const previousContent = await fs.readFile(absolutePath, "utf8").catch(() => null);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, content, "utf8");
 
@@ -3248,6 +3272,10 @@ export function companySkillService(db: Db) {
         .update(companySkills)
         .set({ updatedAt: new Date() })
         .where(eq(companySkills.id, skill.id));
+    }
+
+    if (previousContent !== content) {
+      await createVersion(companyId, skillId, {}, actor);
     }
 
     const detail = await readFile(companyId, skillId, normalizedPath);
